@@ -1,5 +1,5 @@
 export default function GameStatus({ gameState, color, roomId }) {
-  const { turn, fullMoves, gameOver, isCheckmate, isStalemate, inCheck, players, activeEffects = [], bonusMoves = {} } = gameState;
+  const { turn, fullMoves, gameOver, isCheckmate, isStalemate, inCheck, players, activeEffects = [], bonusMoves = {}, phase } = gameState;
   const shareUrl = `${window.location.origin}?room=${roomId}`;
 
   if (gameOver) {
@@ -17,10 +17,11 @@ export default function GameStatus({ gameState, color, roomId }) {
   const waiting = !players?.white || !players?.black;
   const isMyTurn = turn === color;
   const hasBonus = (bonusMoves[color] ?? 0) > 0;
-
-  // Active effects relevant to current player
   const myEffects = activeEffects.filter(e => e.color === color);
   const specialMovesActive = myEffects.some(e => ['PAC_MAN','PAWN_RUSH','KNIGHTS_DOMAIN'].includes(e.cardId));
+
+  // Cards countdown
+  const nextCardIn = phase === 'card-selection' ? 0 : (3 - (fullMoves % 3)) || 3;
 
   let turnLabel = isMyTurn ? '● Your turn' : `${turn}'s turn`;
   if (hasBonus && isMyTurn) turnLabel = '⚡ Bonus move!';
@@ -36,13 +37,21 @@ export default function GameStatus({ gameState, color, roomId }) {
           : <span className={turnClass}>{turnLabel}</span>
         }
         {specialMovesActive && isMyTurn && (
-          <span className="special-hint">✨ Special moves active — try your pieces!</span>
+          <span className="special-hint">✨ Special moves active!</span>
         )}
         <span className="move-count">Move {fullMoves}</span>
       </div>
       <div className="status-right">
         <span className="room-code">Room: <code>{roomId}</code></span>
         <button className="copy-btn" onClick={() => navigator.clipboard.writeText(shareUrl)}>Copy link</button>
+        {!waiting && (
+          <span className="card-countdown">
+            {phase === 'card-selection'
+              ? '🃏 Pick a card!'
+              : `🃏 Cards in ${nextCardIn} ${nextCardIn === 1 ? 'move' : 'moves'}`
+            }
+          </span>
+        )}
       </div>
     </div>
   );

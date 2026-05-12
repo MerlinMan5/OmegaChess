@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Chess } from 'chess.js';
 import { socket } from '../socket';
+import PromotionModal from './PromotionModal';
 
 const UNICODE = {
   wk:'♔',wq:'♕',wr:'♖',wb:'♗',wn:'♘',wp:'♙',
@@ -13,11 +14,18 @@ function toSquare(row, col, flipped) {
   return String.fromCharCode(97 + f) + (r + 1);
 }
 
+function isPromoMove(from, to, piece, colorChar) {
+  if (piece?.type !== 'p') return false;
+  const rank = to[1];
+  return (colorChar === 'w' && rank === '8') || (colorChar === 'b' && rank === '1');
+}
+
 export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe }) {
   const [chess] = useState(() => new Chess());
   const [selected, setSelected] = useState(null);
   const [legalTargets, setLegalTargets] = useState([]);
   const [swapFirst, setSwapFirst] = useState(null);
+  const [pendingPromo, setPendingPromo] = useState(null); // { from, to }
   const flipped = color === 'black';
 
   useEffect(() => {
@@ -25,16 +33,22 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
     setSelected(null);
     setLegalTargets([]);
     setSwapFirst(null);
+    setPendingPromo(null);
   }, [fen]);
 
   const board = chess.board();
   const { awaitingAction, inCheck, lastMove } = gameState;
   const myColorChar = color === 'white' ? 'w' : 'b';
 
+  function sendMove(from, to, promotion) {
+    socket.emit('move', { from, to, ...(promotion ? { promotion } : {}) }, (r) => {
+      if (r.error) console.warn(r.error);
+    });
+  }
+
   function handleClick(sq) {
     if (isAwaitingMe && awaitingAction?.type === 'resurrect') {
-      if (!chess.get(sq))
-        socket.emit('resurrect-piece', sq, (r) => { if (r.error) console.warn(r.error); });
+      if (!chess.get(sq)) socket.emit('resurrect-piece', sq, (r) => { if (r.error) console.warn(r.error); });
       return;
     }
     if (isAwaitingMe && awaitingAction?.type === 'swap') {
@@ -43,10 +57,7 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
       if (!swapFirst) { setSwapFirst(sq); }
       else if (swapFirst === sq) { setSwapFirst(null); }
       else {
-        socket.emit('swap-pieces', [swapFirst, sq], (r) => {
-          if (r.error) console.warn(r.error);
-          setSwapFirst(null);
-        });
+        socket.emit('swap-pieces', [swapFirst, sq], (r) => { if (r.error) console.warn(r.error); setSwapFirst(null); });
       }
       return;
     }
@@ -54,15 +65,14 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
     const piece = chess.get(sq);
     if (selected) {
       if (legalTargets.includes(sq)) {
-        const mv = { from: selected, to: sq };
-        const mp = chess.get(selected);
-        if (mp?.type === 'p') {
-          const rank = sq[1];
-          if ((myColorChar === 'w' && rank === '8') || (myColorChar === 'b' && rank === '1'))
-            mv.promotion = 'q';
+        const movingPiece = chess.get(selected);
+        if (isPromoMove(selected, sq, movingPiece, myColorChar)) {
+          setPendingPromo({ from: selected, to: sq });
+          setSelected(null); setLegalTargets([]);
+        } else {
+          sendMove(selected, sq);
+          setSelected(null); setLegalTargets([]);
         }
-        socket.emit('move', mv, (r) => { if (r.error) console.warn(r.error); });
-        setSelected(null); setLegalTargets([]);
         return;
       }
       if (piece?.color === myColorChar) {
@@ -85,10 +95,7 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
     outer: for (let r = 0; r < 8; r++)
       for (let f = 0; f < 8; f++) {
         const p = board[r][f];
-        if (p?.type === 'k' && p.color === turnChar) {
-          checkSq = String.fromCharCode(97 + f) + (r + 1);
-          break outer;
-        }
+        if (p?.type === 'k' && p.color === turnChar) { checkSq = String.fromCharCode(97+f)+(r+1); break outer; }
       }
   }
 
@@ -104,17 +111,24 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
       const isLight = (br + bf) % 2 !== 0;
       const isSel = selected === sq || swapFirst === sq;
       const isLegal = legalTargets.includes(sq);
-      const isCheck = checkSq === sq;
       const isLastFrom = lastMove?.from === sq;
       const isLastTo = lastMove?.to === sq;
+
+      // Coordinate labels: file on bottom row, rank on left column
+      const showFile = flipped ? row === 0 : row === 7;
+      const showRank = flipped ? col === 7 : col === 0;
+      const fileLetter = String.fromCharCode(flipped ? 104 - col : 97 + col);
+      const rankNum = flipped ? row + 1 : 8 - row;
 
       let cls = `sq ${isLight ? 'light' : 'dark'}`;
       if (isSel) cls += ' sel';
       else if (isLastFrom || isLastTo) cls += ' last-move';
-      if (isCheck) cls += ' check-sq';
+      if (checkSq === sq) cls += ' check-sq';
 
       cells.push(
         <div key={sq} className={cls} onClick={() => handleClick(sq)}>
+          {showRank && <span className={`coord rank ${isLight ? 'dark-text' : 'light-text'}`}>{rankNum}</span>}
+          {showFile && <span className={`coord file ${isLight ? 'dark-text' : 'light-text'}`}>{fileLetter}</span>}
           {isLegal && !piece && <div className="legal-dot" />}
           {isLegal && piece && <div className="legal-cap-ring" />}
           {piece && <span className="piece">{UNICODE[pieceKey]}</span>}
@@ -135,6 +149,12 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
         </div>
       )}
       <div className="board">{rows}</div>
+      {pendingPromo && (
+        <PromotionModal
+          color={color}
+          onSelect={(p) => { sendMove(pendingPromo.from, pendingPromo.to, p); setPendingPromo(null); }}
+        />
+      )}
     </div>
   );
 }
