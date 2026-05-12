@@ -28,26 +28,21 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
   }, [fen]);
 
   const board = chess.board();
-  const { awaitingAction, inCheck } = gameState;
+  const { awaitingAction, inCheck, lastMove } = gameState;
   const myColorChar = color === 'white' ? 'w' : 'b';
 
   function handleClick(sq) {
-    // Resurrection mode
     if (isAwaitingMe && awaitingAction?.type === 'resurrect') {
       if (!chess.get(sq))
         socket.emit('resurrect-piece', sq, (r) => { if (r.error) console.warn(r.error); });
       return;
     }
-
-    // Swap mode
     if (isAwaitingMe && awaitingAction?.type === 'swap') {
       const p = chess.get(sq);
       if (!p || p.color !== myColorChar || p.type === 'k') return;
-      if (!swapFirst) {
-        setSwapFirst(sq);
-      } else if (swapFirst === sq) {
-        setSwapFirst(null);
-      } else {
+      if (!swapFirst) { setSwapFirst(sq); }
+      else if (swapFirst === sq) { setSwapFirst(null); }
+      else {
         socket.emit('swap-pieces', [swapFirst, sq], (r) => {
           if (r.error) console.warn(r.error);
           setSwapFirst(null);
@@ -55,11 +50,8 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
       }
       return;
     }
-
     if (!isMyTurn) return;
-
     const piece = chess.get(sq);
-
     if (selected) {
       if (legalTargets.includes(sq)) {
         const mv = { from: selected, to: sq };
@@ -81,14 +73,12 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
       setSelected(null); setLegalTargets([]);
       return;
     }
-
     if (piece?.color === myColorChar) {
       setSelected(sq);
       setLegalTargets(chess.moves({ square: sq, verbose: true }).map(m => m.to));
     }
   }
 
-  // Find king in check square
   let checkSq = null;
   if (inCheck) {
     const turnChar = gameState.turn === 'white' ? 'w' : 'b';
@@ -115,9 +105,12 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
       const isSel = selected === sq || swapFirst === sq;
       const isLegal = legalTargets.includes(sq);
       const isCheck = checkSq === sq;
+      const isLastFrom = lastMove?.from === sq;
+      const isLastTo = lastMove?.to === sq;
 
       let cls = `sq ${isLight ? 'light' : 'dark'}`;
       if (isSel) cls += ' sel';
+      else if (isLastFrom || isLastTo) cls += ' last-move';
       if (isCheck) cls += ' check-sq';
 
       cells.push(
