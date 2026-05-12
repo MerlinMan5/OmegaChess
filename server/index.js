@@ -84,6 +84,15 @@ io.on('connection', (socket) => {
     if (result.ok) broadcast(socket.data.roomId);
   });
 
+  socket.on('rematch', (cb) => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room) return cb({ error: 'No room' });
+    if (!room.isFull()) return cb({ error: 'Need both players' });
+    room.resetGame();
+    cb({ ok: true });
+    broadcast(socket.data.roomId);
+  });
+
   socket.on('disconnect', () => {
     const { roomId } = socket.data;
     if (!roomId) return;

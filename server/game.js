@@ -16,6 +16,17 @@ function adjacent({ r, f }) {
   return res;
 }
 
+function advanceFenTurn(fen, colorJustMoved) {
+  const parts = fen.split(' ');
+  const next = colorJustMoved === 'white' ? 'b' : 'w';
+  parts[1] = next;
+  // fullmove increments after black moves
+  if (next === 'w') parts[5] = String(parseInt(parts[5]) + 1);
+  parts[4] = String(parseInt(parts[4]) + 1);
+  parts[3] = '-';
+  return parts.join(' ');
+}
+
 class GameRoom {
   constructor(id) {
     this.id = id;
@@ -52,11 +63,28 @@ class GameRoom {
   getPlayerColor(socketId) { return this.players[socketId]; }
   getCurrentTurn() { return this.chess.turn() === 'w' ? 'white' : 'black'; }
 
+  resetGame() {
+    this.chess = new Chess();
+    this.fullMoves = 0;
+    this.lastCardDealAt = 0;
+    this.phase = 'play';
+    this.cardPhase = null;
+    this.activeEffects = [];
+    this.pendingEffects = [];
+    this.capturedPieces = { white: [], black: [] };
+    this.skippedTurns = { white: 0, black: 0 };
+    this.bonusMoves = { white: 0, black: 0 };
+    this.actionQueue = [];
+    this.awaitingAction = null;
+  }
+
   passTurn(socketId) {
     const color = this.getPlayerColor(socketId);
     if (!color || color !== this.getCurrentTurn()) return { error: 'Not your turn' };
     if (this.skippedTurns[color] <= 0) return { error: 'Turn not frozen' };
     this.skippedTurns[color]--;
+    // Advance chess.js turn manually (no move was made)
+    this.chess.load(advanceFenTurn(this.chess.fen(), color));
     this._afterMove(color);
     return { ok: true };
   }
@@ -74,19 +102,142 @@ class GameRoom {
       if (!piece || piece.type !== 'p') return { error: 'Hobbit Charge: only pawns can move' };
     }
 
-    let result;
-    try { result = this.chess.move(move); } catch { return { error: 'Illegal move' }; }
+    // Try standard chess.js move first
+    let result = null;
+    try { result = this.chess.move(move); } catch { /* fall through to special moves */ }
+
+    // Try special moves enabled by active card effects
+    if (!result) {
+      const pawnRush = this.activeEffects.find(e => e.cardId === 'PAWN_RUSH' && e.color === color);
+      if (pawnRush && this._isPawnRushMove(move.from, move.to, color)) {
+        result = this._applySpecialMove(move.from, move.to, color);
+      }
+    }
+
+    if (!result) {
+      const knightsDomain = this.activeEffects.find(e => e.cardId === 'KNIGHTS_DOMAIN' && e.color === color);
+      if (knightsDomain && this._isKnightBishopMove(move.from, move.to, color)) {
+        result = this._applySpecialMove(move.from, move.to, color);
+      }
+    }
+
+    if (!result) {
+      const pacMan = this.activeEffects.find(e => e.cardId === 'PAC_MAN' && e.color === color);
+      if (pacMan && this._isPacManWrap(move.from, move.to, color)) {
+        result = this._applySpecialMove(move.from, move.to, color);
+      }
+    }
+
     if (!result) return { error: 'Illegal move' };
 
     if (result.captured) {
       const capturedColor = color === 'white' ? 'black' : 'white';
-      this.capturedPieces[capturedColor].push(result.captured);
+      // chess.js move() returns captured piece type; _applySpecialMove returns { captured } string
+      const capturedType = typeof result.captured === 'string' ? result.captured : result.captured;
+      this.capturedPieces[capturedColor].push(capturedType);
+
       const nuclear = this.activeEffects.find(e => e.cardId === 'NUCLEAR_PAWN' && e.color === color);
-      if (nuclear && result.piece === 'p') this._nukeAdjacent(result.to);
+      const pieceType = result.piece || result.piece;
+      if (nuclear && pieceType === 'p') this._nukeAdjacent(move.to);
     }
 
     this._afterMove(color);
     return { ok: true };
+  }
+
+  // Apply a move that chess.js would reject (special card effects)
+  _applySpecialMove(from, to, color) {
+    const piece = this.chess.get(from);
+    if (!piece) return null;
+    const target = this.chess.get(to);
+    const colorChar = color === 'white' ? 'w' : 'b';
+    if (target?.color === colorChar) return null;
+    if (target?.type === 'k') return null;
+
+    this.chess.remove(from);
+    this.chess.put(piece, to);
+    this.chess.load(advanceFenTurn(this.chess.fen(), color));
+
+    return { piece: piece.type, captured: target?.type || null, from, to };
+  }
+
+  // Pawn Rush: allow pawns to advance 2 squares from any rank
+  _isPawnRushMove(from, to, color) {
+    const piece = this.chess.get(from);
+    if (!piece || piece.type !== 'p') return false;
+    const colorChar = color === 'white' ? 'w' : 'b';
+    if (piece.color !== colorChar) return false;
+
+    const fromFile = from[0];
+    const toFile = to[0];
+    if (fromFile !== toFile) return false;
+
+    const fromRank = parseInt(from[1]);
+    const toRank = parseInt(to[1]);
+    const rankDiff = color === 'white' ? toRank - fromRank : fromRank - toRank;
+    if (rankDiff !== 2) return false;
+
+    const midRank = color === 'white' ? fromRank + 1 : fromRank - 1;
+    const midSq = fromFile + midRank;
+
+    if (this.chess.get(midSq)) return false; // path blocked
+    if (this.chess.get(to)) return false;     // destination occupied
+
+    // Only needed when chess.js would reject it (non-starting rank)
+    const startingRank = color === 'white' ? 2 : 7;
+    if (fromRank === startingRank) return false; // chess.js handles starting rank normally
+
+    return true;
+  }
+
+  // Knight's Domain: allow knights to slide diagonally like a bishop
+  _isKnightBishopMove(from, to, color) {
+    const piece = this.chess.get(from);
+    if (!piece || piece.type !== 'n') return false;
+    const colorChar = color === 'white' ? 'w' : 'b';
+    if (piece.color !== colorChar) return false;
+
+    const fromFile = from.charCodeAt(0) - 97;
+    const fromRank = parseInt(from[1]) - 1;
+    const toFile = to.charCodeAt(0) - 97;
+    const toRank = parseInt(to[1]) - 1;
+
+    const df = Math.abs(toFile - fromFile);
+    const dr = Math.abs(toRank - fromRank);
+    if (df !== dr || df === 0) return false; // must be diagonal
+
+    // Check sliding path is clear
+    const fileDir = toFile > fromFile ? 1 : -1;
+    const rankDir = toRank > fromRank ? 1 : -1;
+    for (let i = 1; i < df; i++) {
+      const sq = String.fromCharCode(97 + fromFile + i * fileDir) + (fromRank + i * rankDir + 1);
+      if (this.chess.get(sq)) return false;
+    }
+
+    return true;
+  }
+
+  // Pac-Man: allow sliding pieces on file a/h to wrap to the opposite edge
+  _isPacManWrap(from, to, color) {
+    const piece = this.chess.get(from);
+    if (!piece || !['r', 'q'].includes(piece.type)) return false;
+    const colorChar = color === 'white' ? 'w' : 'b';
+    if (piece.color !== colorChar) return false;
+
+    const fromFile = from.charCodeAt(0) - 97;
+    const toFile = to.charCodeAt(0) - 97;
+    const fromRank = from[1];
+    const toRank = to[1];
+
+    if (fromRank !== toRank) return false; // horizontal wrap only
+    // Must move from one edge to the other
+    if (!((fromFile === 0 && toFile === 7) || (fromFile === 7 && toFile === 0))) return false;
+
+    const target = this.chess.get(to);
+    if (target?.color === colorChar) return false;
+    if (target?.type === 'k') return false;
+
+    return true;
   }
 
   _afterMove(color) {
@@ -103,8 +254,14 @@ class GameRoom {
       if (e.cardId === 'OMEGA_CHAD') this._triggerOmegaChad();
     }
 
+    // Double Move: reset turn to same player, don't count this half-move
     if (this.bonusMoves[color] > 0) {
       this.bonusMoves[color]--;
+      const parts = this.chess.fen().split(' ');
+      parts[1] = color === 'white' ? 'w' : 'b';
+      // undo the fullmove increment chess.js applied after black moved
+      if (color === 'black') parts[5] = String(Math.max(1, parseInt(parts[5]) - 1));
+      this.chess.load(parts.join(' '));
       return;
     }
 
