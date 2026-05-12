@@ -4,8 +4,7 @@ import { socket } from '../socket';
 import PromotionModal from './PromotionModal';
 
 const UNICODE = {
-  wk:'♔',wq:'♕',wr:'♖',wb:'♗',wn:'♘',wp:'♙',
-  bk:'♚',bq:'♛',br:'♜',bb:'♝',bn:'♞',bp:'♟',
+  k:'♚', q:'♛', r:'♜', b:'♝', n:'♞', p:'♟',
 };
 
 function toSquare(row, col, flipped) {
@@ -25,7 +24,7 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
   const [selected, setSelected] = useState(null);
   const [legalTargets, setLegalTargets] = useState([]);
   const [swapFirst, setSwapFirst] = useState(null);
-  const [pendingPromo, setPendingPromo] = useState(null); // { from, to }
+  const [pendingPromo, setPendingPromo] = useState(null);
   const flipped = color === 'black';
 
   useEffect(() => {
@@ -107,14 +106,11 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
       const br = flipped ? 7 - row : row;
       const bf = flipped ? 7 - col : col;
       const piece = board[br]?.[bf];
-      const pieceKey = piece ? `${piece.color}${piece.type}` : null;
       const isLight = (br + bf) % 2 !== 0;
       const isSel = selected === sq || swapFirst === sq;
       const isLegal = legalTargets.includes(sq);
       const isLastFrom = lastMove?.from === sq;
       const isLastTo = lastMove?.to === sq;
-
-      // Coordinate labels: file on bottom row, rank on left column
       const showFile = flipped ? row === 0 : row === 7;
       const showRank = flipped ? col === 7 : col === 0;
       const fileLetter = String.fromCharCode(flipped ? 104 - col : 97 + col);
@@ -131,7 +127,11 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
           {showFile && <span className={`coord file ${isLight ? 'dark-text' : 'light-text'}`}>{fileLetter}</span>}
           {isLegal && !piece && <div className="legal-dot" />}
           {isLegal && piece && <div className="legal-cap-ring" />}
-          {piece && <span className="piece">{UNICODE[pieceKey]}</span>}
+          {piece && (
+            <span className={`piece ${piece.color === 'w' ? 'piece-white' : 'piece-black'}`}>
+              {UNICODE[piece.type]}
+            </span>
+          )}
         </div>
       );
     }
