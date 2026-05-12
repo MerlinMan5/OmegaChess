@@ -4,6 +4,7 @@ import Board from './components/Board';
 import CardHand from './components/CardHand';
 import ActiveEffects from './components/ActiveEffects';
 import GameStatus from './components/GameStatus';
+import CapturedPieces from './components/CapturedPieces';
 import './App.css';
 
 export default function App() {
@@ -78,6 +79,12 @@ export default function App() {
   return (
     <div className="app">
       <GameStatus gameState={gameState} color={color} roomId={roomId} />
+
+      {gameState.disconnected && gameState.disconnected !== color && (
+        <div className="disconnect-banner">⚠ Opponent disconnected — waiting for them to reconnect…</div>
+      )}
+
+      <CapturedPieces capturedPieces={gameState.capturedPieces} color={color} />
 
       <Board
         fen={gameState.fen}
