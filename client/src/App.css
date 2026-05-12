@@ -77,12 +77,24 @@
   font-size: .88rem;
 }
 .game-status.gameover {
+  flex-direction: column;
   justify-content: center;
   padding: 18px;
   font-size: 1.1rem;
   font-weight: 700;
   color: #ffe066;
+  gap: 10px;
 }
+.rematch-btn {
+  background: #6c63ff;
+  color: #fff;
+  border: none;
+  padding: 8px 24px;
+  border-radius: 8px;
+  font-size: .95rem;
+  font-weight: 600;
+}
+.rematch-btn:hover { background: #5a52e0; }
 .status-left, .status-right {
   display: flex;
   flex-direction: column;
@@ -94,6 +106,7 @@
 .turn-label.your-turn { color: #6cff6c; font-weight: 700; }
 .turn-label.check { color: #ff6b6b; }
 .waiting-label { color: #ffcc55; font-size: .82rem; }
+.special-hint { color: #b8a4ff; font-size: .75rem; }
 .move-count { color: #666; font-size: .78rem; }
 .room-code code {
   background: #252545;
@@ -164,7 +177,6 @@
 .sq.light { background: #f0d9b5; }
 .sq.dark  { background: #b58863; }
 .sq.sel   { background: #7fc97f !important; }
-.sq.legal-target { background: inherit; }
 .sq.check-sq { background: #e74c3c !important; }
 .legal-dot {
   width: 30%;
