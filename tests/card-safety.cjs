@@ -102,11 +102,10 @@ console.log('\nSuite 4: COPYCAT behavior');
   const r2 = room.selectCard('black-sock', 'PAC_MAN');
   assert(r2.ok, 'black can select PAC_MAN');
 
-  // After both select, cards are resolved — white should have PAC_MAN effect
-  const whitePacMan = room.activeEffects.some(e => e.cardId === 'PAC_MAN' && e.color === 'white');
-  const blackPacMan = room.activeEffects.some(e => e.cardId === 'PAC_MAN' && e.color === 'black');
-  assert(whitePacMan, 'COPYCAT copies opponent PAC_MAN for white');
-  assert(blackPacMan, 'Black gets their own PAC_MAN effect');
+  // PAC_MAN is symmetric (color:'both') — black played it and white copied it → 2 entries
+  const pacManEffects = room.activeEffects.filter(e => e.cardId === 'PAC_MAN');
+  assert(pacManEffects.length === 2, 'Two PAC_MAN effects (one from black, one copied by white)');
+  assert(pacManEffects.every(e => e.color === 'both'), 'PAC_MAN is symmetric — stored as both');
 }
 
 // ── Suite 5: Mutual COPYCAT is a no-op ──────────────────────────────────────
