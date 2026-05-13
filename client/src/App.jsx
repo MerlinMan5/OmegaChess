@@ -5,6 +5,7 @@ import CardHand from './components/CardHand';
 import ActiveEffects from './components/ActiveEffects';
 import GameStatus from './components/GameStatus';
 import CapturedPieces from './components/CapturedPieces';
+import MoveHistory from './components/MoveHistory';
 import './App.css';
 
 export default function App() {
@@ -14,6 +15,8 @@ export default function App() {
   const [gameState, setGameState] = useState(null);
   const [joinInput, setJoinInput] = useState('');
   const [error, setError] = useState('');
+  const [botDifficulty, setBotDifficulty] = useState('medium');
+  const [resignConfirm, setResignConfirm] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -40,8 +43,14 @@ export default function App() {
       setRoomId(roomId);
       setColor(color);
       window.history.replaceState({}, '', `?room=${roomId}`);
-      socket.emit('add-bot', () => {});
+      socket.emit('add-bot', botDifficulty, () => {});
     });
+  }
+
+  function doResign() {
+    if (!resignConfirm) { setResignConfirm(true); return; }
+    socket.emit('resign', () => {});
+    setResignConfirm(false);
   }
 
   function goBack() {
@@ -70,7 +79,14 @@ export default function App() {
         <p className="tagline">Chess with power-up cards · play vs friend or bot</p>
         <div className="play-modes">
           <button className="btn-primary" onClick={doCreate}>👥 Play vs Friend</button>
-          <button className="btn-bot" onClick={doCreateVsBot}>🤖 Play vs Bot</button>
+          <div className="bot-row">
+            <button className="btn-bot" onClick={doCreateVsBot}>🤖 Play vs Bot</button>
+            <select className="difficulty-select" value={botDifficulty} onChange={e => setBotDifficulty(e.target.value)}>
+              <option value="easy">Easy</option>
+              <option value="medium">Medium</option>
+              <option value="hard">Hard</option>
+            </select>
+          </div>
         </div>
         <div className="divider">or join existing</div>
         <div className="join-row">
@@ -96,6 +112,8 @@ export default function App() {
   const oppSelected = gameState.cardPhase?.selections?.[color === 'white' ? 'black' : 'white'];
   const isAwaitingMe = gameState.awaitingAction?.color === color;
   const isFrozen = isMyTurn && (gameState.skippedTurns?.[color] ?? 0) > 0;
+  const drawOfferedByMe = gameState.drawOffer === color;
+  const drawOfferedToMe = gameState.drawOffer && gameState.drawOffer !== color;
 
   return (
     <div className="app">
@@ -150,6 +168,33 @@ export default function App() {
         pendingEffects={gameState.pendingEffects}
         color={color}
       />
+
+      {gameState.phase !== 'gameover' && gameState.phase !== 'waiting' && (
+        <div className="game-controls">
+          {drawOfferedToMe ? (
+            <div className="draw-offer-incoming">
+              <span>Opponent offers a draw</span>
+              <button className="btn-accept-draw" onClick={() => socket.emit('accept-draw', () => {})}>Accept</button>
+              <button className="btn-decline-draw" onClick={() => socket.emit('decline-draw', () => {})}>Decline</button>
+            </div>
+          ) : drawOfferedByMe ? (
+            <span className="draw-pending">⏳ Draw offer pending…</span>
+          ) : (
+            <button className="btn-draw" onClick={() => socket.emit('offer-draw', () => {})}>½ Offer Draw</button>
+          )}
+          {resignConfirm ? (
+            <div className="resign-confirm">
+              <span>Resign?</span>
+              <button className="btn-resign-yes" onClick={doResign}>Yes</button>
+              <button className="btn-resign-no" onClick={() => setResignConfirm(false)}>No</button>
+            </div>
+          ) : (
+            <button className="btn-resign" onClick={doResign}>Resign</button>
+          )}
+        </div>
+      )}
+
+      <MoveHistory moveHistory={gameState.moveHistory} />
     </div>
   );
 }
