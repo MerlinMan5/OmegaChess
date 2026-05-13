@@ -129,7 +129,7 @@ async function makeAnyMove(page) {
 async function newRoom(browser) {
   const p1 = await browser.newPage(), p2 = await browser.newPage();
   await p1.goto(BASE);
-  await p1.click('text=Create Game');
+  await p1.click('.btn-primary');
   await p1.waitForSelector('.room-code');
   const code = await p1.locator('code').textContent();
   await p2.goto(`${BASE}?room=${code}`);
