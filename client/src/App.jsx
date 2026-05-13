@@ -44,6 +44,15 @@ export default function App() {
     });
   }
 
+  function goBack() {
+    setScreen('lobby');
+    setRoomId('');
+    setColor(null);
+    setGameState(null);
+    setError('');
+    window.history.replaceState({}, '', window.location.pathname);
+  }
+
   function doJoin(id) {
     const rid = (id || joinInput).trim().toUpperCase();
     if (!rid) return;
@@ -59,8 +68,10 @@ export default function App() {
       <div className="lobby">
         <h1>♟ Omega Chess</h1>
         <p className="tagline">Chess with power-up cards</p>
-        <button className="btn-primary" onClick={doCreate}>Create Game</button>
-        <button className="btn-bot" onClick={doCreateVsBot}>🤖 Play vs Bot</button>
+        <div className="play-modes">
+          <button className="btn-primary" onClick={doCreate}>👥 Play vs Friend</button>
+          <button className="btn-bot" onClick={doCreateVsBot}>🤖 Play vs Bot</button>
+        </div>
         <div className="divider">or join existing</div>
         <div className="join-row">
           <input
@@ -89,6 +100,13 @@ export default function App() {
   return (
     <div className="app">
       <GameStatus gameState={gameState} color={color} roomId={roomId} />
+
+      {gameState.phase === 'waiting' && !gameState.hasBot && (
+        <div className="waiting-for-opponent">
+          <span>⏳ Waiting for opponent to join…</span>
+          <button className="btn-back" onClick={goBack}>← Back to menu</button>
+        </div>
+      )}
 
       {gameState.hasBot && (
         <div className="bot-banner">🤖 Playing vs Bot</div>
