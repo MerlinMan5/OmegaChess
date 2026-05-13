@@ -39,6 +39,8 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
   const { awaitingAction, inCheck, lastMove, activeEffects = [] } = gameState;
   const myColorChar = color === 'white' ? 'w' : 'b';
   const hobbitActive = activeEffects.some(e => e.cardId === 'HOBBIT_CHARGE');
+  const nuclearActive = activeEffects.some(e => e.cardId === 'NUCLEAR_PAWN');
+  const knightsDomainActive = activeEffects.some(e => e.cardId === 'KNIGHTS_DOMAIN');
 
   function sendMove(from, to, promotion) {
     socket.emit('move', { from, to, ...(promotion ? { promotion } : {}) }, (r) => {
@@ -122,6 +124,9 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
       const fileLetter = String.fromCharCode(flipped ? 104 - col : 97 + col);
       const rankNum = flipped ? row + 1 : 8 - row;
 
+      const isNuclearPawn = nuclearActive && piece?.type === 'p';
+      const isKnightDomain = knightsDomainActive && piece?.type === 'n';
+
       let cls = `sq ${isLight ? 'light' : 'dark'}`;
       if (isSel) cls += ' sel';
       else if (isLastFrom || isLastTo) cls += ' last-move';
@@ -136,6 +141,8 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
           {piece && (
             <span className={`piece ${piece.color === 'w' ? 'piece-white' : 'piece-black'}`}>
               {UNICODE[piece.type]}
+              {isNuclearPawn && <span className="piece-badge">💥</span>}
+              {isKnightDomain && <span className="piece-badge">🐴</span>}
             </span>
           )}
         </div>

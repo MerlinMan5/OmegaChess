@@ -167,6 +167,7 @@ export default function App() {
         effects={gameState.activeEffects}
         pendingEffects={gameState.pendingEffects}
         color={color}
+        lastEvent={gameState.lastEvent}
       />
 
       {gameState.phase !== 'gameover' && gameState.phase !== 'waiting' && (
