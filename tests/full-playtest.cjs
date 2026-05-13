@@ -51,9 +51,12 @@ async function waitMyTurn(page, opts = {}) {
       continue;
     }
 
-    // Card selection — pick first available, then wait for bot to pick too
+    // Card selection — avoid action-requiring cards (RESURRECTION, SWAP_PLACES) to keep the game
+    // flowing without needing to handle the resulting awaitingAction state
     if (await page.locator('.card-hand').isVisible().catch(() => false)) {
-      await page.locator('.card:not(.disabled)').first().click();
+      const safeCard = page.locator('.card:not(.disabled):not([data-card-id="RESURRECTION"]):not([data-card-id="SWAP_PLACES"])');
+      if (await safeCard.count() > 0) await safeCard.first().click();
+      else await page.locator('.card:not(.disabled)').first().click();
       await page.waitForFunction(
         () => !document.querySelector('.card-hand') && !document.querySelector('.waiting-banner'),
         { timeout: 8000 }
@@ -62,11 +65,24 @@ async function waitMyTurn(page, opts = {}) {
       continue;
     }
 
-    // Awaiting action (swap/resurrect) — bot handles its own; if white needs it, skip for now
+    // Awaiting action — perform it so the game advances
     if (await page.locator('.action-banner').isVisible().catch(() => false)) {
+      const banner = await page.locator('.action-banner').textContent().catch(() => '');
+      if (banner.toLowerCase().includes('resurrect')) {
+        // Click the first empty square visible (server validates placement)
+        await page.locator('.sq:not(:has(.piece))').first().click().catch(() => {});
+      } else if (banner.toLowerCase().includes('swap')) {
+        // Click two pieces from the bottom two rows (white's back rank)
+        const bottomPieces = await page.locator('.board-row:nth-last-child(-n+2) .sq:has(.piece)').all();
+        if (bottomPieces.length >= 2) {
+          await bottomPieces[0].click().catch(() => {});
+          await page.waitForTimeout(250);
+          await bottomPieces[1].click().catch(() => {});
+        }
+      }
       await page.waitForFunction(
         () => !document.querySelector('.action-banner') || document.querySelector('.game-status.gameover'),
-        { timeout: 8000 }
+        { timeout: 6000 }
       ).catch(() => {});
       await page.waitForTimeout(300);
       continue;
@@ -89,6 +105,24 @@ function forceHands(roomId, white, black) {
     req.on('error', reject);
     req.write(body); req.end();
   });
+}
+
+// Find any legal move and play it — scans pieces from white's side of board upward
+async function makeAnyMove(page) {
+  for (let row = 7; row >= 0; row--) {
+    for (let col = 0; col < 8; col++) {
+      const sq = page.locator('.board-row').nth(row).locator('.sq').nth(col);
+      await sq.click().catch(() => {});
+      await page.waitForTimeout(150);
+      const dots = await page.locator('.legal-dot, .legal-cap-ring').count();
+      if (dots > 0) {
+        await page.locator('.legal-dot, .legal-cap-ring').first().click().catch(() => {});
+        await page.waitForTimeout(300);
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 async function newRoom(browser) {
@@ -134,13 +168,16 @@ async function newRoom(browser) {
     ];
     let mi = 0;
 
-    for (let iter = 0; iter < 50; iter++) {
+    for (let iter = 0; iter < 80; iter++) {
       const status = await waitMyTurn(p1);
       if (status === 'gameover') break;
       if (status === 'timeout') { console.log('  ⚠ waitMyTurn timed out on iter', iter); break; }
       if (mi < whitePlans.length) {
         await move(p1, whitePlans[mi][0], whitePlans[mi][1]);
         mi++;
+      } else {
+        // Plans exhausted — scan board for any legal move
+        await makeAnyMove(p1);
       }
     }
     // Final wait for any pending bot move / game-over banner
