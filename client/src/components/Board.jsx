@@ -36,8 +36,9 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
   }, [fen]);
 
   const board = chess.board();
-  const { awaitingAction, inCheck, lastMove } = gameState;
+  const { awaitingAction, inCheck, lastMove, activeEffects = [] } = gameState;
   const myColorChar = color === 'white' ? 'w' : 'b';
+  const hobbitActive = activeEffects.some(e => e.cardId === 'HOBBIT_CHARGE');
 
   function sendMove(from, to, promotion) {
     socket.emit('move', { from, to, ...(promotion ? { promotion } : {}) }, (r) => {
@@ -83,6 +84,11 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
       return;
     }
     if (piece?.color === myColorChar) {
+      // Under Hobbit Charge, only pawns can move — don't show dots for other pieces
+      if (hobbitActive && piece.type !== 'p') {
+        setSelected(null); setLegalTargets([]);
+        return;
+      }
       setSelected(sq);
       setLegalTargets(chess.moves({ square: sq, verbose: true }).map(m => m.to));
     }
