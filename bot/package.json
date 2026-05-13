@@ -1,0 +1,8 @@
+{
+  "name": "omegachess-bot",
+  "private": true,
+  "dependencies": {
+    "chess.js": "^1.0.0",
+    "socket.io-client": "^4.7.0"
+  }
+}
