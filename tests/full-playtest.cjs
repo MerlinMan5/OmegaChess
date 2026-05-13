@@ -38,7 +38,8 @@ async function waitMyTurn(page, opts = {}) {
       // awaiting-action banners
       if (document.querySelector('.action-banner')) return true;
       const lbl = document.querySelector('.turn-label');
-      return lbl && lbl.textContent.includes('Your turn');
+      // Label is "● Your turn" normally, or "⚡ Bonus move!" with DOUBLE_MOVE active
+      return lbl && (lbl.textContent.includes('Your turn') || lbl.textContent.includes('Bonus move'));
     }, { timeout }).catch(() => {});
     await page.waitForTimeout(200);
 
@@ -88,7 +89,7 @@ async function waitMyTurn(page, opts = {}) {
       continue;
     }
 
-    if (await page.locator('.turn-label').textContent().then(t => t.includes('Your turn')).catch(() => false))
+    if (await page.locator('.turn-label').textContent().then(t => t.includes('Your turn') || t.includes('Bonus move')).catch(() => false))
       return 'my-turn';
   }
   return 'timeout';
