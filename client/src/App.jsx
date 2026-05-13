@@ -35,6 +35,15 @@ export default function App() {
     });
   }
 
+  function doCreateVsBot() {
+    socket.emit('create-room', ({ roomId, color }) => {
+      setRoomId(roomId);
+      setColor(color);
+      window.history.replaceState({}, '', `?room=${roomId}`);
+      socket.emit('add-bot', () => {});
+    });
+  }
+
   function doJoin(id) {
     const rid = (id || joinInput).trim().toUpperCase();
     if (!rid) return;
@@ -51,6 +60,7 @@ export default function App() {
         <h1>♟ Omega Chess</h1>
         <p className="tagline">Chess with power-up cards</p>
         <button className="btn-primary" onClick={doCreate}>Create Game</button>
+        <button className="btn-bot" onClick={doCreateVsBot}>🤖 Play vs Bot</button>
         <div className="divider">or join existing</div>
         <div className="join-row">
           <input
@@ -80,7 +90,10 @@ export default function App() {
     <div className="app">
       <GameStatus gameState={gameState} color={color} roomId={roomId} />
 
-      {gameState.disconnected && gameState.disconnected !== color && (
+      {gameState.hasBot && (
+        <div className="bot-banner">🤖 Playing vs Bot</div>
+      )}
+      {!gameState.hasBot && gameState.disconnected && gameState.disconnected !== color && (
         <div className="disconnect-banner">⚠ Opponent disconnected — waiting for them to reconnect…</div>
       )}
 

@@ -32,6 +32,17 @@
   transition: background .15s;
 }
 .btn-primary:hover { background: #5a52e0; }
+.btn-bot {
+  background: #2a2a4a;
+  color: #aaa;
+  border: 1px solid #555;
+  padding: 10px 28px;
+  border-radius: 10px;
+  font-size: .95rem;
+  font-weight: 600;
+  transition: background .15s, border-color .15s;
+}
+.btn-bot:hover { background: #333360; border-color: #888; color: #fff; }
 .divider { color: #555; font-size: .85rem; }
 .join-row { display: flex; gap: 8px; }
 .join-row input {
@@ -116,7 +127,17 @@
 }
 .copy-btn:hover { background: #252545; color: #fff; }
 
-/* ── Disconnect banner ── */
+/* ── Bot / Disconnect banners ── */
+.bot-banner {
+  width: 100%;
+  background: #1a2a1a;
+  color: #88cc88;
+  border: 1px solid #336633;
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-size: .82rem;
+  text-align: center;
+}
 .disconnect-banner {
   width: 100%;
   background: #3a2a00;

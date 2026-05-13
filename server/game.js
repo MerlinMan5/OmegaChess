@@ -45,6 +45,8 @@ class GameRoom {
     this.awaitingAction = null;
     this.lastMove = null;        // { from, to } for highlighting
     this.disconnected = null;    // color of disconnected player
+    this.botColor = null;
+    this.onBotAction = null;     // set by index.js to trigger broadcast after bot moves
   }
 
   addPlayer(socketId, color) {
@@ -61,6 +63,75 @@ class GameRoom {
       delete this.colors[color];
       this.disconnected = color;
     }
+  }
+
+  addBot(color) {
+    this.players['__bot__'] = color;
+    this.colors[color] = '__bot__';
+    this.botColor = color;
+    if (Object.keys(this.players).length === 2) this.phase = 'play';
+  }
+
+  _scheduleBotTurn() {
+    if (!this.botColor || !this.onBotAction) return;
+    const needsCard = this.phase === 'card-selection' && this.cardPhase && !this.cardPhase.selections[this.botColor];
+    const needsAction = this.phase === 'awaiting-action' && this.awaitingAction?.color === this.botColor;
+    const needsMove = this.phase === 'play' && this.getCurrentTurn() === this.botColor;
+    if (!needsCard && !needsAction && !needsMove) return;
+    setTimeout(() => this._doBotTurn(), 500 + Math.random() * 600);
+  }
+
+  _doBotTurn() {
+    if (!this.botColor || !this.onBotAction) return;
+    const color = this.botColor;
+
+    if (this.phase === 'card-selection' && this.cardPhase && !this.cardPhase.selections[color]) {
+      const hand = this.cardPhase.hands[color];
+      const card = hand[Math.floor(Math.random() * hand.length)];
+      if (this.selectCard('__bot__', card.id).ok) this.onBotAction();
+      return;
+    }
+
+    if (this.phase === 'awaiting-action' && this.awaitingAction?.color === color) {
+      const { type } = this.awaitingAction;
+      const board = this.chess.board();
+      const cc = color === 'white' ? 'w' : 'b';
+      if (type === 'swap') {
+        const pieces = [];
+        for (let r = 0; r < 8; r++)
+          for (let f = 0; f < 8; f++)
+            if (board[r][f]?.color === cc && board[r][f]?.type !== 'k')
+              pieces.push(String.fromCharCode(97+f)+(r+1));
+        if (pieces.length >= 2) {
+          pieces.sort(() => Math.random() - 0.5);
+          if (this.applySwap('__bot__', [pieces[0], pieces[1]]).ok) this.onBotAction();
+        }
+      } else if (type === 'resurrect') {
+        const empty = [];
+        for (let r = 0; r < 8; r++)
+          for (let f = 0; f < 8; f++)
+            if (!board[r][f]) empty.push(String.fromCharCode(97+f)+(r+1));
+        if (empty.length) {
+          const sq = empty[Math.floor(Math.random() * empty.length)];
+          if (this.applyResurrection('__bot__', sq).ok) this.onBotAction();
+        }
+      }
+      return;
+    }
+
+    if (this.phase !== 'play' || this.getCurrentTurn() !== color || this.chess.isGameOver()) return;
+
+    if (this.skippedTurns[color] > 0) {
+      if (this.passTurn('__bot__').ok) this.onBotAction();
+      return;
+    }
+
+    const moves = this.chess.moves({ verbose: true });
+    if (!moves.length) return;
+    const m = moves[Math.floor(Math.random() * moves.length)];
+    const move = { from: m.from, to: m.to };
+    if (m.promotion) move.promotion = 'q';
+    if (this.applyMove('__bot__', move).ok) this.onBotAction();
   }
 
   isFull() { return Object.keys(this.players).length >= 2; }
@@ -82,6 +153,11 @@ class GameRoom {
     this.actionQueue = [];
     this.awaitingAction = null;
     this.lastMove = null;
+    // Re-register bot if present (bot always plays black)
+    if (this.botColor) {
+      this.players['__bot__'] = this.botColor;
+      this.colors[this.botColor] = '__bot__';
+    }
   }
 
   passTurn(socketId) {
@@ -223,9 +299,11 @@ class GameRoom {
     if (this.fullMoves > 0 && this.fullMoves % 3 === 0 && this.fullMoves !== this.lastCardDealAt) {
       this.lastCardDealAt = this.fullMoves;
       this._startCardPhase();
+      this._scheduleBotTurn();
       return;
     }
     this._nextAwaitingOrPlay();
+    this._scheduleBotTurn();
   }
 
   _nukeAdjacent(square) {
@@ -279,6 +357,7 @@ class GameRoom {
     this.cardPhase = null;
     for (const color of ['white', 'black']) this._applyCard(selections[color], color);
     this._nextAwaitingOrPlay();
+    this._scheduleBotTurn();
   }
 
   _applyCard(cardId, color) {
@@ -318,6 +397,7 @@ class GameRoom {
     this.chess.remove(sq1); this.chess.remove(sq2);
     this.chess.put(p1, sq2); this.chess.put(p2, sq1);
     this._nextAwaitingOrPlay();
+    this._scheduleBotTurn();
     return { ok: true };
   }
 
@@ -331,6 +411,7 @@ class GameRoom {
     this.chess.put({ type: pieceType, color: color === 'white' ? 'w' : 'b' }, square);
     this.capturedPieces[color].pop();
     this._nextAwaitingOrPlay();
+    this._scheduleBotTurn();
     return { ok: true };
   }
 
@@ -357,6 +438,7 @@ class GameRoom {
       isCheckmate: this.chess.isCheckmate(),
       isStalemate: this.chess.isStalemate(),
       players: { white: !!this.colors.white, black: !!this.colors.black },
+      hasBot: !!this.botColor,
     };
   }
 }

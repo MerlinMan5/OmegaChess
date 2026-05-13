@@ -44,6 +44,16 @@ io.on('connection', (socket) => {
     broadcast(roomId);
   });
 
+  socket.on('add-bot', (cb) => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room) return cb({ error: 'No room' });
+    if (room.isFull()) return cb({ error: 'Room is full' });
+    room.addBot('black');
+    room.onBotAction = () => broadcast(socket.data.roomId);
+    cb({ ok: true });
+    broadcast(socket.data.roomId);
+  });
+
   socket.on('move', (move, cb) => {
     const room = rooms.get(socket.data.roomId);
     if (!room) return cb({ error: 'No room' });
