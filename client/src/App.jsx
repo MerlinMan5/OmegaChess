@@ -67,7 +67,7 @@ export default function App() {
     return (
       <div className="lobby">
         <h1>♟ Omega Chess</h1>
-        <p className="tagline">Chess with power-up cards</p>
+        <p className="tagline">Chess with power-up cards · play vs friend or bot</p>
         <div className="play-modes">
           <button className="btn-primary" onClick={doCreate}>👥 Play vs Friend</button>
           <button className="btn-bot" onClick={doCreateVsBot}>🤖 Play vs Bot</button>
