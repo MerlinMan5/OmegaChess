@@ -32,6 +32,36 @@
   transition: background .15s;
 }
 .btn-primary:hover { background: #5a52e0; }
+.play-modes {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 280px;
+}
+.btn-back {
+  background: none;
+  border: 1px solid #444;
+  color: #888;
+  padding: 5px 14px;
+  border-radius: 8px;
+  font-size: .82rem;
+  cursor: pointer;
+  transition: color .15s, border-color .15s;
+}
+.btn-back:hover { color: #ccc; border-color: #777; }
+.waiting-for-opponent {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #1a3050;
+  color: #88bbff;
+  padding: 8px 14px;
+  border-radius: 10px;
+  font-size: .88rem;
+}
 .btn-bot {
   background: #2a2a4a;
   color: #aaa;
