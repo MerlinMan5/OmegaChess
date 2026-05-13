@@ -7,6 +7,112 @@ function dealCards() {
   return [...CARD_POOL].sort(() => Math.random() - 0.5).slice(0, 3);
 }
 
+// ── Bot evaluation ────────────────────────────────────────────────────────────
+const PIECE_VALUE = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 20000 };
+
+// Piece-square tables indexed [rank_from_top(0=rank8)][file(0=a)], white's perspective.
+// Black pieces use the vertically mirrored row.
+const PST = {
+  p: [
+    [ 0,  0,  0,  0,  0,  0,  0,  0],
+    [50, 50, 50, 50, 50, 50, 50, 50],
+    [10, 10, 20, 30, 30, 20, 10, 10],
+    [ 5,  5, 10, 25, 25, 10,  5,  5],
+    [ 0,  0,  0, 20, 20,  0,  0,  0],
+    [ 5, -5,-10,  0,  0,-10, -5,  5],
+    [ 5, 10, 10,-20,-20, 10, 10,  5],
+    [ 0,  0,  0,  0,  0,  0,  0,  0],
+  ],
+  n: [
+    [-50,-40,-30,-30,-30,-30,-40,-50],
+    [-40,-20,  0,  0,  0,  0,-20,-40],
+    [-30,  0, 10, 15, 15, 10,  0,-30],
+    [-30,  5, 15, 20, 20, 15,  5,-30],
+    [-30,  0, 15, 20, 20, 15,  0,-30],
+    [-30,  5, 10, 15, 15, 10,  5,-30],
+    [-40,-20,  0,  5,  5,  0,-20,-40],
+    [-50,-40,-30,-30,-30,-30,-40,-50],
+  ],
+  b: [
+    [-20,-10,-10,-10,-10,-10,-10,-20],
+    [-10,  0,  0,  0,  0,  0,  0,-10],
+    [-10,  0,  5, 10, 10,  5,  0,-10],
+    [-10,  5,  5, 10, 10,  5,  5,-10],
+    [-10,  0, 10, 10, 10, 10,  0,-10],
+    [-10, 10, 10, 10, 10, 10, 10,-10],
+    [-10,  5,  0,  0,  0,  0,  5,-10],
+    [-20,-10,-10,-10,-10,-10,-10,-20],
+  ],
+  r: [
+    [ 0,  0,  0,  0,  0,  0,  0,  0],
+    [ 5, 10, 10, 10, 10, 10, 10,  5],
+    [-5,  0,  0,  0,  0,  0,  0, -5],
+    [-5,  0,  0,  0,  0,  0,  0, -5],
+    [-5,  0,  0,  0,  0,  0,  0, -5],
+    [-5,  0,  0,  0,  0,  0,  0, -5],
+    [-5,  0,  0,  0,  0,  0,  0, -5],
+    [ 0,  0,  0,  5,  5,  0,  0,  0],
+  ],
+  q: [
+    [-20,-10,-10, -5, -5,-10,-10,-20],
+    [-10,  0,  0,  0,  0,  0,  0,-10],
+    [-10,  0,  5,  5,  5,  5,  0,-10],
+    [ -5,  0,  5,  5,  5,  5,  0, -5],
+    [  0,  0,  5,  5,  5,  5,  0, -5],
+    [-10,  5,  5,  5,  5,  5,  0,-10],
+    [-10,  0,  5,  0,  0,  0,  0,-10],
+    [-20,-10,-10, -5, -5,-10,-10,-20],
+  ],
+  k: [
+    [-30,-40,-40,-50,-50,-40,-40,-30],
+    [-30,-40,-40,-50,-50,-40,-40,-30],
+    [-30,-40,-40,-50,-50,-40,-40,-30],
+    [-30,-40,-40,-50,-50,-40,-40,-30],
+    [-20,-30,-30,-40,-40,-30,-30,-20],
+    [-10,-20,-20,-20,-20,-20,-20,-10],
+    [ 20, 20,  0,  0,  0,  0, 20, 20],
+    [ 20, 30, 10,  0,  0, 10, 30, 20],
+  ],
+};
+
+function evalBoard(chess, botColorChar) {
+  let score = 0;
+  for (let r = 0; r < 8; r++) {
+    for (let f = 0; f < 8; f++) {
+      const p = chess.board()[r][f];
+      if (!p) continue;
+      const pstRow = p.color === 'w' ? r : 7 - r;
+      const val = (PIECE_VALUE[p.type] || 0) + (PST[p.type]?.[pstRow]?.[f] ?? 0);
+      score += p.color === botColorChar ? val : -val;
+    }
+  }
+  return score;
+}
+
+function pickBotMove(chess, botColorChar) {
+  const moves = chess.moves({ verbose: true });
+  if (!moves.length) return null;
+
+  let bestScore = -Infinity;
+  let best = [];
+  for (const m of moves) {
+    chess.move(m);
+    let score;
+    if (chess.isCheckmate())      score = 1_000_000;
+    else if (chess.isStalemate()) score = -50_000;   // avoid stalemate when winning
+    else {
+      score = evalBoard(chess, botColorChar);
+      if (chess.inCheck()) score += 30;              // small bonus for giving check
+    }
+    chess.undo();
+    score += (Math.random() - 0.5) * 10;             // tiny jitter breaks ties
+    if (score > bestScore) { bestScore = score; best = [m]; }
+    else if (score === bestScore) best.push(m);
+  }
+  return best[Math.floor(Math.random() * best.length)];
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 function adjacent({ r, f }) {
   const res = [];
   for (let dr = -1; dr <= 1; dr++)
@@ -126,9 +232,9 @@ class GameRoom {
       return;
     }
 
-    const moves = this.chess.moves({ verbose: true });
-    if (!moves.length) return;
-    const m = moves[Math.floor(Math.random() * moves.length)];
+    const cc = color === 'white' ? 'w' : 'b';
+    const m = pickBotMove(this.chess, cc);
+    if (!m) return;
     const move = { from: m.from, to: m.to };
     if (m.promotion) move.promotion = 'q';
     if (this.applyMove('__bot__', move).ok) this.onBotAction();
