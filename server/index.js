@@ -14,6 +14,22 @@ const rooms = new Map();
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
+// Dev-only: force specific card hands for intersection testing
+if (process.env.NODE_ENV !== 'production') {
+  const { CARDS } = require('./cards');
+  app.use(express.json());
+  app.post('/test/set-hands', (req, res) => {
+    const { roomId, white, black } = req.body;
+    const room = rooms.get(roomId);
+    if (!room) return res.status(404).json({ error: 'room not found' });
+    if (room.phase !== 'card-selection') return res.status(400).json({ error: 'not in card-selection' });
+    if (white) room.cardPhase.hands.white = white.map(id => CARDS[id]).filter(Boolean);
+    if (black) room.cardPhase.hands.black = black.map(id => CARDS[id]).filter(Boolean);
+    broadcast(roomId);  // push updated hands to connected clients
+    res.json({ ok: true });
+  });
+}
+
 function broadcast(roomId) {
   const room = rooms.get(roomId);
   if (room) io.to(roomId).emit('game-state', room.getState());
@@ -42,6 +58,16 @@ io.on('connection', (socket) => {
     socket.data.color = 'black';
     cb({ color: 'black' });
     broadcast(roomId);
+  });
+
+  socket.on('add-bot', (cb) => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room) return cb({ error: 'No room' });
+    if (room.isFull()) return cb({ error: 'Room is full' });
+    room.addBot('black');
+    room.onBotAction = () => broadcast(socket.data.roomId);
+    cb({ ok: true });
+    broadcast(socket.data.roomId);
   });
 
   socket.on('move', (move, cb) => {
