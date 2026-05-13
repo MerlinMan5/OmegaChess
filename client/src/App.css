@@ -40,6 +40,23 @@
   width: 100%;
   max-width: 280px;
 }
+.bot-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.bot-row .btn-bot { flex: 1; }
+.difficulty-select {
+  background: #252545;
+  border: 1px solid #555;
+  color: #ccc;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: .88rem;
+  cursor: pointer;
+}
+.difficulty-select:hover { border-color: #888; }
 .btn-back {
   background: none;
   border: 1px solid #444;
@@ -334,6 +351,116 @@
   font-size: .9rem;
   width: 100%;
 }
+/* ── Game controls (resign / draw) ── */
+.game-controls {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.btn-draw {
+  background: none;
+  border: 1px solid #555;
+  color: #aaa;
+  padding: 5px 14px;
+  border-radius: 8px;
+  font-size: .8rem;
+  cursor: pointer;
+  transition: color .15s, border-color .15s;
+}
+.btn-draw:hover { color: #fff; border-color: #888; }
+.btn-resign {
+  background: none;
+  border: 1px solid #7a2222;
+  color: #cc5555;
+  padding: 5px 14px;
+  border-radius: 8px;
+  font-size: .8rem;
+  cursor: pointer;
+  transition: color .15s, border-color .15s;
+}
+.btn-resign:hover { color: #ff8888; border-color: #aa3333; }
+.resign-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .82rem;
+  color: #ff8888;
+}
+.btn-resign-yes {
+  background: #7a2222;
+  color: #fff;
+  border: none;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: .8rem;
+  cursor: pointer;
+}
+.btn-resign-yes:hover { background: #993333; }
+.btn-resign-no {
+  background: #333;
+  color: #ccc;
+  border: 1px solid #555;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: .8rem;
+  cursor: pointer;
+}
+.btn-resign-no:hover { background: #444; }
+.draw-offer-incoming {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #1a3050;
+  color: #88bbff;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: .82rem;
+}
+.btn-accept-draw {
+  background: #1a5a1a;
+  color: #88ff88;
+  border: none;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: .8rem;
+  cursor: pointer;
+}
+.btn-accept-draw:hover { background: #226622; }
+.btn-decline-draw {
+  background: #5a1a1a;
+  color: #ff8888;
+  border: none;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: .8rem;
+  cursor: pointer;
+}
+.btn-decline-draw:hover { background: #772222; }
+.draw-pending { color: #ffcc55; font-size: .8rem; }
+
+/* ── Move history ── */
+.move-history {
+  width: 100%;
+  background: #16213e;
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+.move-history h4 { font-size: .75rem; color: #666; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+.move-list {
+  display: grid;
+  grid-template-columns: 28px 1fr 1fr;
+  gap: 2px 4px;
+  max-height: 120px;
+  overflow-y: auto;
+  font-size: .78rem;
+  font-family: monospace;
+}
+.move-num { color: #555; text-align: right; }
+.move-san { color: #ccc; }
+
 .active-effects { width: 100%; background: #16213e; border-radius: 10px; padding: 10px 14px; }
 .active-effects h4 { font-size: .75rem; color: #666; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
 .effect-row { font-size: .78rem; padding: 3px 0; border-bottom: 1px solid #1e1e3a; color: #bbb; }

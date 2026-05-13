@@ -10,8 +10,6 @@ function dealCards() {
 // ── Bot evaluation ────────────────────────────────────────────────────────────
 const PIECE_VALUE = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 20000 };
 
-// Piece-square tables indexed [rank_from_top(0=rank8)][file(0=a)], white's perspective.
-// Black pieces use the vertically mirrored row.
 const PST = {
   p: [
     [ 0,  0,  0,  0,  0,  0,  0,  0],
@@ -89,23 +87,72 @@ function evalBoard(chess, botColorChar) {
   return score;
 }
 
-function pickBotMove(chess, botColorChar) {
+// Depth-1 greedy (medium difficulty)
+function pickBotMoveMedium(chess, botColorChar) {
   const moves = chess.moves({ verbose: true });
   if (!moves.length) return null;
-
   let bestScore = -Infinity;
   let best = [];
   for (const m of moves) {
     chess.move(m);
     let score;
     if (chess.isCheckmate())      score = 1_000_000;
-    else if (chess.isStalemate()) score = -50_000;   // avoid stalemate when winning
+    else if (chess.isStalemate()) score = -50_000;
     else {
       score = evalBoard(chess, botColorChar);
-      if (chess.inCheck()) score += 30;              // small bonus for giving check
+      if (chess.inCheck()) score += 30;
     }
     chess.undo();
-    score += (Math.random() - 0.5) * 10;             // tiny jitter breaks ties
+    score += (Math.random() - 0.5) * 10;
+    if (score > bestScore) { bestScore = score; best = [m]; }
+    else if (score === bestScore) best.push(m);
+  }
+  return best[Math.floor(Math.random() * best.length)];
+}
+
+// Minimax with alpha-beta (hard difficulty, 3-ply look-ahead)
+function minimax(chess, depth, alpha, beta, maximizing, botColorChar) {
+  if (chess.isGameOver()) {
+    if (chess.isCheckmate()) return maximizing ? -900_000 : 900_000;
+    return 0;
+  }
+  if (depth === 0) return evalBoard(chess, botColorChar);
+  const moves = chess.moves({ verbose: true });
+  // Move ordering: captures first to improve pruning
+  moves.sort((a, b) => (b.flags.includes('c') ? 1 : 0) - (a.flags.includes('c') ? 1 : 0));
+  if (maximizing) {
+    let best = -Infinity;
+    for (const m of moves) {
+      chess.move(m);
+      best = Math.max(best, minimax(chess, depth - 1, alpha, beta, false, botColorChar));
+      chess.undo();
+      alpha = Math.max(alpha, best);
+      if (beta <= alpha) break;
+    }
+    return best;
+  } else {
+    let best = Infinity;
+    for (const m of moves) {
+      chess.move(m);
+      best = Math.min(best, minimax(chess, depth - 1, alpha, beta, true, botColorChar));
+      chess.undo();
+      beta = Math.min(beta, best);
+      if (beta <= alpha) break;
+    }
+    return best;
+  }
+}
+
+function pickBotMoveHard(chess, botColorChar) {
+  const moves = chess.moves({ verbose: true });
+  if (!moves.length) return null;
+  moves.sort((a, b) => (b.flags.includes('c') ? 1 : 0) - (a.flags.includes('c') ? 1 : 0));
+  let bestScore = -Infinity;
+  let best = [];
+  for (const m of moves) {
+    chess.move(m);
+    const score = minimax(chess, 2, -Infinity, Infinity, false, botColorChar);
+    chess.undo();
     if (score > bestScore) { bestScore = score; best = [m]; }
     else if (score === bestScore) best.push(m);
   }
@@ -149,10 +196,16 @@ class GameRoom {
     this.bonusMoves = { white: 0, black: 0 };
     this.actionQueue = [];
     this.awaitingAction = null;
-    this.lastMove = null;        // { from, to } for highlighting
-    this.disconnected = null;    // color of disconnected player
+    this.lastMove = null;
+    this.disconnected = null;
     this.botColor = null;
-    this.onBotAction = null;     // set by index.js to trigger broadcast after bot moves
+    this.botDifficulty = 'medium';
+    this.onBotAction = null;
+    // Resignation / draw
+    this.isResignation = false;
+    this.resignedColor = null;
+    this.drawOffer = null;       // { from: color } | null
+    this.isDraw = false;
   }
 
   addPlayer(socketId, color) {
@@ -171,10 +224,11 @@ class GameRoom {
     }
   }
 
-  addBot(color) {
+  addBot(color, difficulty = 'medium') {
     this.players['__bot__'] = color;
     this.colors[color] = '__bot__';
     this.botColor = color;
+    this.botDifficulty = difficulty;
     if (Object.keys(this.players).length === 2) this.phase = 'play';
   }
 
@@ -184,7 +238,9 @@ class GameRoom {
     const needsAction = this.phase === 'awaiting-action' && this.awaitingAction?.color === this.botColor;
     const needsMove = this.phase === 'play' && this.getCurrentTurn() === this.botColor;
     if (!needsCard && !needsAction && !needsMove) return;
-    setTimeout(() => this._doBotTurn(), 500 + Math.random() * 600);
+    // Hard bot thinks longer
+    const delay = this.botDifficulty === 'hard' ? 800 + Math.random() * 700 : 500 + Math.random() * 600;
+    setTimeout(() => this._doBotTurn(), delay);
   }
 
   _doBotTurn() {
@@ -209,8 +265,12 @@ class GameRoom {
             if (board[r][f]?.color === cc && board[r][f]?.type !== 'k')
               pieces.push(String.fromCharCode(97+f)+(r+1));
         if (pieces.length >= 2) {
+          // Try random swaps until one doesn't leave own king in check
           pieces.sort(() => Math.random() - 0.5);
-          if (this.applySwap('__bot__', [pieces[0], pieces[1]]).ok) this.onBotAction();
+          for (let i = 0; i < pieces.length - 1; i++) {
+            const result = this.applySwap('__bot__', [pieces[i], pieces[i+1]]);
+            if (result.ok) { this.onBotAction(); return; }
+          }
         }
       } else if (type === 'resurrect') {
         const empty = [];
@@ -233,7 +293,15 @@ class GameRoom {
     }
 
     const cc = color === 'white' ? 'w' : 'b';
-    const m = pickBotMove(this.chess, cc);
+    let m;
+    if (this.botDifficulty === 'easy') {
+      const moves = this.chess.moves({ verbose: true });
+      m = moves[Math.floor(Math.random() * moves.length)];
+    } else if (this.botDifficulty === 'hard') {
+      m = pickBotMoveHard(this.chess, cc);
+    } else {
+      m = pickBotMoveMedium(this.chess, cc);
+    }
     if (!m) return;
     const move = { from: m.from, to: m.to };
     if (m.promotion) move.promotion = 'q';
@@ -244,6 +312,58 @@ class GameRoom {
   isEmpty() { return Object.keys(this.players).length === 0; }
   getPlayerColor(socketId) { return this.players[socketId]; }
   getCurrentTurn() { return this.chess.turn() === 'w' ? 'white' : 'black'; }
+
+  // Returns true if colorChar's king is currently in check in this position
+  _kingInCheck(colorChar) {
+    const fen = this.chess.fen();
+    const parts = fen.split(' ');
+    parts[1] = colorChar;
+    const temp = new Chess();
+    try { temp.load(parts.join(' ')); return temp.inCheck(); }
+    catch { return false; }
+  }
+
+  // Returns true if a piece at this position is protected by SHIELD_WALL
+  _isShielded(pieceColorChar) {
+    const fullColor = pieceColorChar === 'w' ? 'white' : 'black';
+    return this.activeEffects.some(e => e.cardId === 'SHIELD_WALL' && e.color === fullColor);
+  }
+
+  resign(socketId) {
+    const color = this.getPlayerColor(socketId);
+    if (!color) return { error: 'Not a player' };
+    if (this.phase === 'gameover') return { error: 'Game already over' };
+    this.isResignation = true;
+    this.resignedColor = color;
+    this.phase = 'gameover';
+    return { ok: true };
+  }
+
+  offerDraw(socketId) {
+    const color = this.getPlayerColor(socketId);
+    if (!color || this.phase === 'gameover') return { error: 'Cannot offer draw' };
+    if (this.drawOffer) return { error: 'Draw already offered' };
+    this.drawOffer = { from: color };
+    return { ok: true };
+  }
+
+  acceptDraw(socketId) {
+    const color = this.getPlayerColor(socketId);
+    if (!color || !this.drawOffer || this.drawOffer.from === color)
+      return { error: 'No draw offer to accept' };
+    this.isDraw = true;
+    this.drawOffer = null;
+    this.phase = 'gameover';
+    return { ok: true };
+  }
+
+  declineDraw(socketId) {
+    const color = this.getPlayerColor(socketId);
+    if (!color || !this.drawOffer || this.drawOffer.from === color)
+      return { error: 'No draw offer to decline' };
+    this.drawOffer = null;
+    return { ok: true };
+  }
 
   resetGame() {
     this.chess = new Chess();
@@ -259,7 +379,10 @@ class GameRoom {
     this.actionQueue = [];
     this.awaitingAction = null;
     this.lastMove = null;
-    // Re-register bot if present (bot always plays black)
+    this.isResignation = false;
+    this.resignedColor = null;
+    this.drawOffer = null;
+    this.isDraw = false;
     if (this.botColor) {
       this.players['__bot__'] = this.botColor;
       this.colors[this.botColor] = '__bot__';
@@ -329,7 +452,7 @@ class GameRoom {
     const target = this.chess.get(to);
     const colorChar = color === 'white' ? 'w' : 'b';
     if (target?.color === colorChar) return null;
-    if (target?.type === 'k') return null;
+    if (target?.type === 'k') return null;         // never capture kings via card moves
     this.chess.remove(from);
     this.chess.put(piece, to);
     this.chess.load(advanceFenTurn(this.chess.fen(), color));
@@ -378,7 +501,7 @@ class GameRoom {
     if (!((fromFile === 0 && toFile === 7) || (fromFile === 7 && toFile === 0))) return false;
     const target = this.chess.get(to);
     if (target?.color === (color === 'white' ? 'w' : 'b')) return false;
-    if (target?.type === 'k') return false;
+    if (target?.type === 'k') return null;
     return true;
   }
 
@@ -421,7 +544,8 @@ class GameRoom {
         if (f<0||f>7||r<0||r>7) continue;
         const sq = String.fromCharCode(97+f)+(r+1);
         const p = this.chess.get(sq);
-        if (p && p.type !== 'k') this.chess.remove(sq);
+        // Safety: never remove kings; respect SHIELD_WALL
+        if (p && p.type !== 'k' && !this._isShielded(p.color)) this.chess.remove(sq);
       }
   }
 
@@ -438,7 +562,8 @@ class GameRoom {
     for (const { r, f } of both) {
       const sq = String.fromCharCode(97+f)+(r+1);
       const p = this.chess.get(sq);
-      if (p && p.type !== 'k') this.chess.remove(sq);
+      // Safety: never remove kings; respect SHIELD_WALL
+      if (p && p.type !== 'k' && !this._isShielded(p.color)) this.chess.remove(sq);
     }
   }
 
@@ -461,7 +586,17 @@ class GameRoom {
   _resolveCards() {
     const selections = { ...this.cardPhase.selections };
     this.cardPhase = null;
-    for (const color of ['white', 'black']) this._applyCard(selections[color], color);
+    // Apply non-COPYCAT cards first so COPYCAT can reference them
+    for (const color of ['white', 'black']) {
+      if (selections[color] !== 'COPYCAT') this._applyCard(selections[color], color);
+    }
+    // Now apply COPYCAT — copies opponent's card (not another COPYCAT)
+    for (const color of ['white', 'black']) {
+      if (selections[color] === 'COPYCAT') {
+        const opp = color === 'white' ? 'black' : 'white';
+        if (selections[opp] && selections[opp] !== 'COPYCAT') this._applyCard(selections[opp], color);
+      }
+    }
     this._nextAwaitingOrPlay();
     this._scheduleBotTurn();
   }
@@ -500,8 +635,15 @@ class GameRoom {
     const cc = color === 'white' ? 'w' : 'b';
     if (p1.color !== cc || p2.color !== cc) return { error: 'Can only swap your own pieces' };
     if (p1.type === 'k' || p2.type === 'k') return { error: "Can't swap the king" };
+    // Perform swap
     this.chess.remove(sq1); this.chess.remove(sq2);
     this.chess.put(p1, sq2); this.chess.put(p2, sq1);
+    // Safety: reject if swap exposes own king to check
+    if (this._kingInCheck(cc)) {
+      this.chess.remove(sq1); this.chess.remove(sq2);
+      this.chess.put(p1, sq1); this.chess.put(p2, sq2);
+      return { error: 'Swap would leave your king in check' };
+    }
     this._nextAwaitingOrPlay();
     this._scheduleBotTurn();
     return { ok: true };
@@ -513,8 +655,14 @@ class GameRoom {
       return { error: 'Not awaiting resurrection from you' };
     if (!this.capturedPieces[color].length) return { error: 'No captured pieces' };
     if (this.chess.get(square)) return { error: 'Square is occupied' };
+    const cc = color === 'white' ? 'w' : 'b';
     const pieceType = this.capturedPieces[color][this.capturedPieces[color].length - 1];
-    this.chess.put({ type: pieceType, color: color === 'white' ? 'w' : 'b' }, square);
+    this.chess.put({ type: pieceType, color: cc }, square);
+    // Safety: reject if resurrection exposes own king to check
+    if (this._kingInCheck(cc)) {
+      this.chess.remove(square);
+      return { error: 'Placement would leave your king in check' };
+    }
     this.capturedPieces[color].pop();
     this._nextAwaitingOrPlay();
     this._scheduleBotTurn();
@@ -539,12 +687,18 @@ class GameRoom {
       skippedTurns: this.skippedTurns,
       bonusMoves: this.bonusMoves,
       awaitingAction: this.awaitingAction,
-      gameOver: this.chess.isGameOver(),
+      gameOver: this.chess.isGameOver() || this.phase === 'gameover',
       inCheck: this.chess.inCheck(),
       isCheckmate: this.chess.isCheckmate(),
       isStalemate: this.chess.isStalemate(),
+      isResignation: this.isResignation,
+      resignedColor: this.resignedColor,
+      isDraw: this.isDraw,
+      drawOffer: this.drawOffer,
+      moveHistory: this.chess.history(),
       players: { white: !!this.colors.white, black: !!this.colors.black },
       hasBot: !!this.botColor,
+      botDifficulty: this.botDifficulty,
     };
   }
 }
