@@ -1,11 +1,19 @@
 export default function GameStatus({ gameState, color, roomId }) {
-  const { turn, fullMoves, gameOver, isCheckmate, isStalemate, inCheck, players, activeEffects = [], bonusMoves = {}, phase } = gameState;
+  const { turn, fullMoves, gameOver, isCheckmate, isStalemate, inCheck, players, activeEffects = [], bonusMoves = {}, phase, isResignation, resignedColor, isDraw, drawOffer, hasBot } = gameState;
   const shareUrl = `${window.location.origin}?room=${roomId}`;
 
   if (gameOver) {
     let msg = 'Game over!';
-    if (isCheckmate) msg = `${turn === 'white' ? 'Black' : 'White'} wins by checkmate!`;
-    else if (isStalemate) msg = 'Draw by stalemate!';
+    if (isResignation) {
+      const winner = resignedColor === 'white' ? 'Black' : 'White';
+      msg = resignedColor === color ? 'You resigned. ' + winner + ' wins!' : `Opponent resigned. You win!`;
+    } else if (isCheckmate) {
+      msg = `${turn === 'white' ? 'Black' : 'White'} wins by checkmate!`;
+    } else if (isDraw) {
+      msg = 'Draw by agreement!';
+    } else if (isStalemate) {
+      msg = 'Draw by stalemate!';
+    }
     return (
       <div className="game-status gameover">
         {msg}

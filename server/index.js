@@ -60,13 +60,15 @@ io.on('connection', (socket) => {
     broadcast(roomId);
   });
 
-  socket.on('add-bot', (cb) => {
+  socket.on('add-bot', (difficulty, cb) => {
+    const d = typeof difficulty === 'string' ? difficulty : 'medium';
+    const cbFn = typeof difficulty === 'function' ? difficulty : (cb || (() => {}));
     const room = rooms.get(socket.data.roomId);
-    if (!room) return cb({ error: 'No room' });
-    if (room.isFull()) return cb({ error: 'Room is full' });
-    room.addBot('black');
+    if (!room) return cbFn({ error: 'No room' });
+    if (room.isFull()) return cbFn({ error: 'Room is full' });
+    room.addBot('black', d);
     room.onBotAction = () => broadcast(socket.data.roomId);
-    cb({ ok: true });
+    cbFn({ ok: true });
     broadcast(socket.data.roomId);
   });
 
@@ -106,6 +108,38 @@ io.on('connection', (socket) => {
     const room = rooms.get(socket.data.roomId);
     if (!room) return cb({ error: 'No room' });
     const result = room.applyResurrection(socket.id, square);
+    cb(result);
+    if (result.ok) broadcast(socket.data.roomId);
+  });
+
+  socket.on('resign', (cb) => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room) return cb({ error: 'No room' });
+    const result = room.resign(socket.id);
+    cb(result);
+    if (result.ok) broadcast(socket.data.roomId);
+  });
+
+  socket.on('offer-draw', (cb) => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room) return cb({ error: 'No room' });
+    const result = room.offerDraw(socket.id);
+    cb(result);
+    if (result.ok) broadcast(socket.data.roomId);
+  });
+
+  socket.on('accept-draw', (cb) => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room) return cb({ error: 'No room' });
+    const result = room.acceptDraw(socket.id);
+    cb(result);
+    if (result.ok) broadcast(socket.data.roomId);
+  });
+
+  socket.on('decline-draw', (cb) => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room) return cb({ error: 'No room' });
+    const result = room.declineDraw(socket.id);
     cb(result);
     if (result.ok) broadcast(socket.data.roomId);
   });
