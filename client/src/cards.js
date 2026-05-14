@@ -1,9 +1,9 @@
 export const CARD_META = {
-  OMEGA_CHAD:     { emoji: '💀', name: 'Omega Chad Energy',  desc: 'In 3 turns, pieces adjacent to both kings are destroyed.' },
+  OMEGA_CHAD:     { emoji: '💀', name: 'Omega Chad Energy',  desc: 'In 3 turns, all non-king pieces adjacent to either king are destroyed.' },
   PAC_MAN:        { emoji: '👾', name: 'Pac-Man',            desc: 'All pieces wrap around left/right board edges.' },
   HOBBIT_CHARGE:  { emoji: '🧙', name: 'Hobbit Charge',      desc: 'Only pawns can move.' },
-  DOUBLE_MOVE:    { emoji: '⚡', name: 'Double Move',         desc: 'Take two moves in a row.' },
-  TIME_FREEZE:    { emoji: '🧊', name: 'Time Freeze',         desc: 'Both players skip their next turn.' },
+  DOUBLE_MOVE:    { emoji: '⚡', name: 'Double Move',         desc: 'Both players take two moves in a row this round.' },
+  TIME_FREEZE:    { emoji: '🧊', name: 'Time Freeze',         desc: 'Your opponent must skip their next turn.' },
   RESURRECTION:   { emoji: '✨', name: 'Resurrection',        desc: 'Place your most recently captured piece on any empty square.' },
   KNIGHTS_DOMAIN: { emoji: '🐴', name: "Knight's Domain",    desc: 'All knights can also move like bishops.' },
   NUCLEAR_PAWN:   { emoji: '💥', name: 'Nuclear Pawn',        desc: 'When any pawn captures, all adjacent pieces are destroyed.' },
