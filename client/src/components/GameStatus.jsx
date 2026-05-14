@@ -1,18 +1,17 @@
 export default function GameStatus({ gameState, color, roomId }) {
-  const { turn, fullMoves, gameOver, isCheckmate, isStalemate, inCheck, players, activeEffects = [], bonusMoves = {}, phase, isResignation, resignedColor, isDraw, drawOffer, hasBot } = gameState;
+  const { turn, fullMoves, gameOver, winner, inCheck, players, activeEffects = [], bonusMoves = {}, phase, isResignation, resignedColor, isDraw, drawOffer, hasBot, lastEvent } = gameState;
   const shareUrl = `${window.location.origin}?room=${roomId}`;
 
   if (gameOver) {
     let msg = 'Game over!';
     if (isResignation) {
-      const winner = resignedColor === 'white' ? 'Black' : 'White';
-      msg = resignedColor === color ? 'You resigned. ' + winner + ' wins!' : `Opponent resigned. You win!`;
-    } else if (isCheckmate) {
-      msg = `${turn === 'white' ? 'Black' : 'White'} wins by checkmate!`;
+      const winnerColor = resignedColor === 'white' ? 'Black' : 'White';
+      msg = resignedColor === color ? `You resigned. ${winnerColor} wins!` : `Opponent resigned. You win!`;
     } else if (isDraw) {
       msg = 'Draw by agreement!';
-    } else if (isStalemate) {
-      msg = 'Draw by stalemate!';
+    } else if (lastEvent?.type === 'KING_CAPTURED' || winner) {
+      const winnerColor = winner ? (winner.charAt(0).toUpperCase() + winner.slice(1)) : '';
+      msg = winner === color ? '👑 You captured the king! You win!' : `${winnerColor} captured the king and wins!`;
     }
     return (
       <div className="game-status gameover">

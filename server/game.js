@@ -7,7 +7,7 @@ function dealCards() {
   return [...CARD_POOL].sort(() => Math.random() - 0.5).slice(0, 3);
 }
 
-// ── Bot evaluation ────────────────────────────────────────────────────────────
+// ── Evaluation helpers ────────────────────────────────────────────────────────
 const PIECE_VALUE = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 20000 };
 
 const PST = {
@@ -73,11 +73,11 @@ const PST = {
   ],
 };
 
-function evalBoard(chess, botColorChar) {
+function evalBoard(board, botColorChar) {
   let score = 0;
   for (let r = 0; r < 8; r++) {
     for (let f = 0; f < 8; f++) {
-      const p = chess.board()[r][f];
+      const p = board[r][f];
       if (!p) continue;
       const pstRow = p.color === 'w' ? r : 7 - r;
       const val = (PIECE_VALUE[p.type] || 0) + (PST[p.type]?.[pstRow]?.[f] ?? 0);
@@ -85,80 +85,6 @@ function evalBoard(chess, botColorChar) {
     }
   }
   return score;
-}
-
-// Depth-1 greedy (medium difficulty)
-function pickBotMoveMedium(chess, botColorChar, hobbitActive = false) {
-  let moves = chess.moves({ verbose: true });
-  if (hobbitActive) moves = moves.filter(m => m.piece === 'p');
-  if (!moves.length) return null;
-  let bestScore = -Infinity;
-  let best = [];
-  for (const m of moves) {
-    chess.move(m);
-    let score;
-    if (chess.isCheckmate())      score = 1_000_000;
-    else if (chess.isStalemate()) score = -50_000;
-    else {
-      score = evalBoard(chess, botColorChar);
-      if (chess.inCheck()) score += 30;
-    }
-    chess.undo();
-    score += (Math.random() - 0.5) * 10;
-    if (score > bestScore) { bestScore = score; best = [m]; }
-    else if (score === bestScore) best.push(m);
-  }
-  return best[Math.floor(Math.random() * best.length)];
-}
-
-// Minimax with alpha-beta (hard difficulty, 3-ply look-ahead)
-function minimax(chess, depth, alpha, beta, maximizing, botColorChar) {
-  if (chess.isGameOver()) {
-    if (chess.isCheckmate()) return maximizing ? -900_000 : 900_000;
-    return 0;
-  }
-  if (depth === 0) return evalBoard(chess, botColorChar);
-  const moves = chess.moves({ verbose: true });
-  // Move ordering: captures first to improve pruning
-  moves.sort((a, b) => (b.flags.includes('c') ? 1 : 0) - (a.flags.includes('c') ? 1 : 0));
-  if (maximizing) {
-    let best = -Infinity;
-    for (const m of moves) {
-      chess.move(m);
-      best = Math.max(best, minimax(chess, depth - 1, alpha, beta, false, botColorChar));
-      chess.undo();
-      alpha = Math.max(alpha, best);
-      if (beta <= alpha) break;
-    }
-    return best;
-  } else {
-    let best = Infinity;
-    for (const m of moves) {
-      chess.move(m);
-      best = Math.min(best, minimax(chess, depth - 1, alpha, beta, true, botColorChar));
-      chess.undo();
-      beta = Math.min(beta, best);
-      if (beta <= alpha) break;
-    }
-    return best;
-  }
-}
-
-function pickBotMoveHard(chess, botColorChar, hobbitActive = false) {
-  let moves = chess.moves({ verbose: true });
-  if (hobbitActive) moves = moves.filter(m => m.piece === 'p');
-  if (!moves.length) return null;
-  moves.sort((a, b) => (b.flags.includes('c') ? 1 : 0) - (a.flags.includes('c') ? 1 : 0));
-  let bestScore = -Infinity;
-  let best = [];
-  for (const m of moves) {
-    chess.move(m);
-    const score = minimax(chess, 2, -Infinity, Infinity, false, botColorChar);
-    chess.undo();
-    if (score > bestScore) { bestScore = score; best = [m]; }
-    else if (score === bestScore) best.push(m);
-  }
-  return best[Math.floor(Math.random() * best.length)];
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -203,13 +129,14 @@ class GameRoom {
     this.botColor = null;
     this.botDifficulty = 'medium';
     this.onBotAction = null;
-    // Resignation / draw
     this.isResignation = false;
     this.resignedColor = null;
-    this.drawOffer = null;       // { from: color } | null
+    this.drawOffer = null;
     this.isDraw = false;
-    this.lastEvent = null;       // { type, ... } — cleared each move, used for UI notifications
-    this.fastMode = false;       // set true in tests to skip bot delays
+    this.lastEvent = null;
+    this.fastMode = false;
+    this.moveHistory = [];
+    this.winner = null; // 'white' | 'black' | null
   }
 
   addPlayer(socketId, color) {
@@ -243,7 +170,6 @@ class GameRoom {
     const needsMove = this.phase === 'play' && this.getCurrentTurn() === this.botColor;
     if (!needsCard && !needsAction && !needsMove) return;
     if (this.fastMode) { setImmediate(() => this._doBotTurn()); return; }
-    // Hard bot thinks longer
     const delay = this.botDifficulty === 'hard' ? 800 + Math.random() * 700 : 500 + Math.random() * 600;
     setTimeout(() => this._doBotTurn(), delay);
   }
@@ -268,7 +194,7 @@ class GameRoom {
         for (let r = 0; r < 8; r++)
           for (let f = 0; f < 8; f++)
             if (board[r][f]?.color === cc && board[r][f]?.type !== 'k')
-              pieces.push(String.fromCharCode(97+f)+(r+1));
+              pieces.push(String.fromCharCode(97+f)+(8-r));
         let swapped = false;
         if (pieces.length >= 2) {
           pieces.sort(() => Math.random() - 0.5);
@@ -276,15 +202,18 @@ class GameRoom {
             if (this.applySwap('__bot__', [pieces[i], pieces[i+1]]).ok) { swapped = true; break; }
           }
         }
-        if (!swapped) {
-          // Can't swap — skip the action and continue
-          this._nextAwaitingOrPlay();
-        }
+        if (!swapped) this._nextAwaitingOrPlay();
       } else if (type === 'resurrect') {
+        const nextPiece = this.capturedPieces[color]?.[this.capturedPieces[color].length - 1];
         const empty = [];
         for (let r = 0; r < 8; r++)
-          for (let f = 0; f < 8; f++)
-            if (!board[r][f]) empty.push(String.fromCharCode(97+f)+(r+1));
+          for (let f = 0; f < 8; f++) {
+            if (board[r][f]) continue;
+            const sq = String.fromCharCode(97+f)+(8-r);
+            // Avoid promotion ranks for pawns
+            if (nextPiece === 'p' && (sq[1] === '1' || sq[1] === '8')) continue;
+            empty.push(sq);
+          }
         let resurrected = false;
         if (empty.length) {
           const sq = empty[Math.floor(Math.random() * empty.length)];
@@ -292,14 +221,13 @@ class GameRoom {
         }
         if (!resurrected) this._nextAwaitingOrPlay();
       } else {
-        // Unknown action type — skip it
         this._nextAwaitingOrPlay();
       }
       this.onBotAction();
       return;
     }
 
-    if (this.phase !== 'play' || this.getCurrentTurn() !== color || this.chess.isGameOver()) return;
+    if (this.phase !== 'play' || this.getCurrentTurn() !== color) return;
 
     if (this.skippedTurns[color] > 0) {
       if (this.passTurn('__bot__').ok) this.onBotAction();
@@ -307,40 +235,100 @@ class GameRoom {
     }
 
     const cc = color === 'white' ? 'w' : 'b';
-    const hobbitActive = this.activeEffects.some(e => e.cardId === 'HOBBIT_CHARGE');
-    let m;
-    if (this.botDifficulty === 'easy') {
-      let moves = this.chess.moves({ verbose: true });
-      if (hobbitActive) moves = moves.filter(mv => mv.piece === 'p');
-      m = moves[Math.floor(Math.random() * moves.length)];
-    } else if (this.botDifficulty === 'hard') {
-      m = pickBotMoveHard(this.chess, cc, hobbitActive);
-    } else {
-      m = pickBotMoveMedium(this.chess, cc, hobbitActive);
-    }
-    if (!m) {
-      // No legal moves — game should be over (checkmate/stalemate detected on next check)
-      if (!this.chess.isGameOver()) this.phase = 'gameover';
+    const legalMoves = this.getLegalMoves();
+
+    if (!legalMoves.length) {
+      this.phase = 'gameover';
       this.onBotAction();
       return;
     }
+
+    let m;
+    if (this.botDifficulty === 'easy') {
+      m = legalMoves[Math.floor(Math.random() * legalMoves.length)];
+    } else {
+      m = this._pickBotMove(legalMoves, cc, this.botDifficulty === 'hard');
+    }
+
     const move = { from: m.from, to: m.to };
-    if (m.promotion) move.promotion = 'q';
+    if (m.promotion) move.promotion = m.promotion;
+    else if (m.piece === 'p') {
+      const toRank = parseInt(m.to[1]);
+      if ((cc === 'w' && toRank === 8) || (cc === 'b' && toRank === 1)) move.promotion = 'q';
+    }
+
     const result = this.applyMove('__bot__', move);
     if (result.ok) {
       this.onBotAction();
     } else {
-      // Move failed unexpectedly — fall back to a random legal move
-      const fallback = this.chess.moves({ verbose: true });
-      const fm = fallback[Math.floor(Math.random() * fallback.length)];
-      if (fm && this.applyMove('__bot__', { from: fm.from, to: fm.to }).ok) {
-        this.onBotAction();
-      } else {
-        // Truly stuck — end the game gracefully
-        if (!this.chess.isGameOver()) this.phase = 'gameover';
-        this.onBotAction();
+      // Fallback: try any move
+      for (const fm of legalMoves) {
+        const fa = { from: fm.from, to: fm.to };
+        if (fm.promotion) fa.promotion = fm.promotion;
+        if (this.applyMove('__bot__', fa).ok) break;
       }
+      this.onBotAction();
     }
+  }
+
+  // Greedy bot: depth-1 for medium, depth-2 for hard
+  _pickBotMove(legalMoves, colorChar, deep = false) {
+    // King capture is an instant win — always take it
+    const kingCapture = legalMoves.find(m => m.captured === 'k');
+    if (kingCapture) return kingCapture;
+
+    const savedFen = this.chess.fen();
+    const oppColorChar = colorChar === 'w' ? 'b' : 'w';
+    let bestScore = -Infinity;
+    let best = [];
+
+    for (const m of legalMoves) {
+      let score = 0;
+      const applied = this._applyMoveForEval(m, colorChar);
+      if (applied) {
+        if (deep) {
+          const afterFen = this.chess.fen();
+          const oppMoves = this._generateMoves(oppColorChar);
+          if (oppMoves.some(om => om.captured === 'k')) {
+            score = -900_000;
+          } else {
+            let oppBest = -Infinity;
+            for (const om of oppMoves.slice(0, 15)) {
+              const oppApplied = this._applyMoveForEval(om, oppColorChar);
+              if (oppApplied) {
+                const s = evalBoard(this.chess.board(), colorChar);
+                if (s > oppBest) oppBest = s;
+              }
+              let restored = false;
+              try { this.chess.load(afterFen); restored = true; } catch { /* ignore */ }
+              if (!restored) break; // stop inner eval if restore fails — outer loop will restore savedFen
+            }
+            score = evalBoard(this.chess.board(), colorChar) - (oppBest !== -Infinity ? oppBest * 0.4 : 0);
+          }
+        } else {
+          score = evalBoard(this.chess.board(), colorChar);
+        }
+      } else {
+        score = (PIECE_VALUE[m.captured] || 0);
+      }
+      // Always restore position after eval (even on failure, to fix corrupted board state)
+      try { this.chess.load(savedFen); } catch { /* ignore */ }
+      score += (Math.random() - 0.5) * 10;
+      if (score > bestScore) { bestScore = score; best = [m]; }
+      else if (score === bestScore) best.push(m);
+    }
+
+    return best[Math.floor(Math.random() * best.length)] || legalMoves[0];
+  }
+
+  // Apply a move from _generateMoves for evaluation purposes, returns true if applied
+  _applyMoveForEval(m, colorChar) {
+    try {
+      const r = this.chess.move({ from: m.from, to: m.to, promotion: m.promotion || 'q' });
+      if (r) return true;
+    } catch { /* fall through */ }
+    const r = this._applyAnyMove(m.from, m.to, colorChar, m.promotion);
+    return !!r;
   }
 
   isFull() { return Object.keys(this.players).length >= 2; }
@@ -348,28 +336,300 @@ class GameRoom {
   getPlayerColor(socketId) { return this.players[socketId]; }
   getCurrentTurn() { return this.chess.turn() === 'w' ? 'white' : 'black'; }
 
-  // Returns legal moves for the current position, filtered by active card effects
-  getLegalMoves() {
-    let moves = this.chess.moves({ verbose: true });
-    if (this.activeEffects.some(e => e.cardId === 'HOBBIT_CHARGE'))
-      moves = moves.filter(m => m.piece === 'p');
+  // Generate all pseudo-legal moves for colorChar without any check validation.
+  // In capture-the-king mode, there is no check enforcement — opponents simply capture the king.
+  _generateMoves(colorChar) {
+    const board = this.chess.board();
+    const fen = this.chess.fen();
+    const fenParts = fen.split(' ');
+    const epSquare = fenParts[3]; // '-' or e.g. 'e3'
+    const castling = fenParts[2]; // castling rights
+
+    const oppColor = colorChar === 'w' ? 'b' : 'w';
+    const moves = [];
+    const sq = (row, col) => String.fromCharCode(97 + col) + (8 - row);
+    const get = (row, col) => (row >= 0 && row < 8 && col >= 0 && col < 8) ? board[row][col] : null;
+
+    for (let row = 0; row < 8; row++) {
+      for (let col = 0; col < 8; col++) {
+        const piece = board[row][col];
+        if (!piece || piece.color !== colorChar) continue;
+        const fromSq = sq(row, col);
+
+        if (piece.type === 'p') {
+          const dir = colorChar === 'w' ? -1 : 1;
+          const startRow = colorChar === 'w' ? 6 : 1;
+          const promoRow = colorChar === 'w' ? 0 : 7;
+
+          const nr = row + dir;
+          if (nr >= 0 && nr <= 7 && !get(nr, col)) {
+            const toSq = sq(nr, col);
+            if (nr === promoRow) {
+              for (const p of ['q', 'r', 'b', 'n'])
+                moves.push({ from: fromSq, to: toSq, piece: 'p', captured: null, promotion: p, flags: 'p' });
+            } else {
+              moves.push({ from: fromSq, to: toSq, piece: 'p', captured: null, promotion: null, flags: 'n' });
+              if (row === startRow && !get(nr + dir, col))
+                moves.push({ from: fromSq, to: sq(nr + dir, col), piece: 'p', captured: null, promotion: null, flags: 'b' });
+            }
+          }
+
+          for (const dc of [-1, 1]) {
+            const cnr = row + dir, cnc = col + dc;
+            if (cnr < 0 || cnr > 7 || cnc < 0 || cnc > 7) continue;
+            const target = get(cnr, cnc);
+            const toSq = sq(cnr, cnc);
+            if (target && target.color === oppColor) {
+              if (cnr === promoRow) {
+                for (const p of ['q', 'r', 'b', 'n'])
+                  moves.push({ from: fromSq, to: toSq, piece: 'p', captured: target.type, promotion: p, flags: 'cp' });
+              } else {
+                moves.push({ from: fromSq, to: toSq, piece: 'p', captured: target.type, promotion: null, flags: 'c' });
+              }
+            }
+            if (toSq === epSquare && !target)
+              moves.push({ from: fromSq, to: toSq, piece: 'p', captured: 'p', promotion: null, flags: 'e' });
+          }
+
+        } else if (piece.type === 'n') {
+          for (const [dr, dc] of [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]]) {
+            const nr = row + dr, nc = col + dc;
+            if (nr < 0 || nr > 7 || nc < 0 || nc > 7) continue;
+            const target = get(nr, nc);
+            if (!target || target.color !== colorChar)
+              moves.push({ from: fromSq, to: sq(nr, nc), piece: 'n', captured: target?.type || null, promotion: null, flags: target ? 'c' : 'n' });
+          }
+
+        } else if (piece.type === 'b' || piece.type === 'r' || piece.type === 'q') {
+          const rays = piece.type === 'b' ? [[-1,-1],[-1,1],[1,-1],[1,1]] :
+                       piece.type === 'r' ? [[-1,0],[1,0],[0,-1],[0,1]] :
+                       [[-1,-1],[-1,1],[1,-1],[1,1],[-1,0],[1,0],[0,-1],[0,1]];
+          for (const [dr, dc] of rays) {
+            let nr = row + dr, nc = col + dc;
+            while (nr >= 0 && nr <= 7 && nc >= 0 && nc <= 7) {
+              const target = get(nr, nc);
+              if (!target) {
+                moves.push({ from: fromSq, to: sq(nr, nc), piece: piece.type, captured: null, promotion: null, flags: 'n' });
+              } else {
+                if (target.color !== colorChar)
+                  moves.push({ from: fromSq, to: sq(nr, nc), piece: piece.type, captured: target.type, promotion: null, flags: 'c' });
+                break;
+              }
+              nr += dr; nc += dc;
+            }
+          }
+
+        } else if (piece.type === 'k') {
+          for (const [dr, dc] of [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]]) {
+            const nr = row + dr, nc = col + dc;
+            if (nr < 0 || nr > 7 || nc < 0 || nc > 7) continue;
+            const target = get(nr, nc);
+            if (!target || target.color !== colorChar)
+              moves.push({ from: fromSq, to: sq(nr, nc), piece: 'k', captured: target?.type || null, promotion: null, flags: target ? 'c' : 'n' });
+          }
+
+          // Castling — no check validation in CTK mode
+          if (colorChar === 'w' && row === 7 && col === 4) {
+            if (castling.includes('K') && !get(7,5) && !get(7,6) && get(7,7)?.type === 'r' && get(7,7)?.color === 'w')
+              moves.push({ from: fromSq, to: 'g1', piece: 'k', captured: null, promotion: null, flags: 'k' });
+            if (castling.includes('Q') && !get(7,3) && !get(7,2) && !get(7,1) && get(7,0)?.type === 'r' && get(7,0)?.color === 'w')
+              moves.push({ from: fromSq, to: 'c1', piece: 'k', captured: null, promotion: null, flags: 'q' });
+          } else if (colorChar === 'b' && row === 0 && col === 4) {
+            if (castling.includes('k') && !get(0,5) && !get(0,6) && get(0,7)?.type === 'r' && get(0,7)?.color === 'b')
+              moves.push({ from: fromSq, to: 'g8', piece: 'k', captured: null, promotion: null, flags: 'k' });
+            if (castling.includes('q') && !get(0,3) && !get(0,2) && !get(0,1) && get(0,0)?.type === 'r' && get(0,0)?.color === 'b')
+              moves.push({ from: fromSq, to: 'c8', piece: 'k', captured: null, promotion: null, flags: 'q' });
+          }
+        }
+      }
+    }
+
     return moves;
   }
 
-  // Returns true if colorChar's king is currently in check in this position
-  _kingInCheck(colorChar) {
+  // Apply a move directly, bypassing chess.js check enforcement.
+  // Handles en passant, castling, promotion, and FEN update.
+  _applyAnyMove(from, to, colorChar, promotion) {
+    const piece = this.chess.get(from);
+    if (!piece || piece.color !== colorChar) return null;
+
     const fen = this.chess.fen();
-    const parts = fen.split(' ');
-    parts[1] = colorChar;
-    const temp = new Chess();
-    try { temp.load(parts.join(' ')); return temp.inCheck(); }
-    catch { return false; }
+    const fenParts = fen.split(' ');
+    const epSquare = fenParts[3];
+    const castling = fenParts[2];
+    const halfmove = parseInt(fenParts[4]) || 0;
+    const fullmove = parseInt(fenParts[5]) || 1;
+
+    const target = this.chess.get(to);
+    let captured = target?.type || null;
+
+    // En passant capture
+    if (piece.type === 'p' && to === epSquare && !target) {
+      const epRank = colorChar === 'w' ? parseInt(to[1]) - 1 : parseInt(to[1]) + 1;
+      const epCapSq = to[0] + epRank;
+      const epPawn = this.chess.get(epCapSq);
+      captured = epPawn?.type || null;
+      this.chess.remove(epCapSq);
+    }
+
+    // Castling: move the rook too
+    if (piece.type === 'k') {
+      const fromFile = from.charCodeAt(0) - 97;
+      const toFile = to.charCodeAt(0) - 97;
+      if (Math.abs(toFile - fromFile) === 2) {
+        if (toFile === 6) {
+          const rFrom = colorChar === 'w' ? 'h1' : 'h8';
+          const rTo = colorChar === 'w' ? 'f1' : 'f8';
+          const rook = this.chess.get(rFrom);
+          if (rook) { this.chess.remove(rFrom); this.chess.put(rook, rTo); }
+        } else if (toFile === 2) {
+          const rFrom = colorChar === 'w' ? 'a1' : 'a8';
+          const rTo = colorChar === 'w' ? 'd1' : 'd8';
+          const rook = this.chess.get(rFrom);
+          if (rook) { this.chess.remove(rFrom); this.chess.put(rook, rTo); }
+        }
+      }
+    }
+
+    this.chess.remove(from);
+    // Auto-promote if pawn reaches promo rank without explicit promotion (avoids invalid FEN)
+    let promo = promotion;
+    if (piece.type === 'p' && !promo) {
+      const rank = to[1];
+      if ((colorChar === 'w' && rank === '8') || (colorChar === 'b' && rank === '1')) promo = 'q';
+    }
+    const finalPiece = (piece.type === 'p' && promo) ? { type: promo, color: colorChar } : piece;
+    this.chess.put(finalPiece, to);
+
+    // Update castling rights
+    let newCastling = castling;
+    if (piece.type === 'k') newCastling = newCastling.replace(colorChar === 'w' ? /[KQ]/g : /[kq]/g, '');
+    if (from === 'h1' || to === 'h1') newCastling = newCastling.replace('K', '');
+    if (from === 'a1' || to === 'a1') newCastling = newCastling.replace('Q', '');
+    if (from === 'h8' || to === 'h8') newCastling = newCastling.replace('k', '');
+    if (from === 'a8' || to === 'a8') newCastling = newCastling.replace('q', '');
+    if (!newCastling) newCastling = '-';
+
+    // En passant square: only valid for standard double pawn push from starting rank
+    // (PAWN_RUSH pushes from non-starting ranks would create invalid EP squares)
+    let newEp = '-';
+    if (piece.type === 'p') {
+      const fromRank = parseInt(from[1]);
+      const toRank = parseInt(to[1]);
+      const startingRank = colorChar === 'w' ? 2 : 7;
+      if (fromRank === startingRank && Math.abs(toRank - fromRank) === 2) {
+        const epRank = colorChar === 'w' ? fromRank + 1 : fromRank - 1;
+        newEp = from[0] + epRank;
+      }
+    }
+
+    const newHalfmove = (piece.type === 'p' || captured) ? 0 : halfmove + 1;
+    const newFullmove = colorChar === 'w' ? fullmove : fullmove + 1;
+    const nextTurn = colorChar === 'w' ? 'b' : 'w';
+
+    const boardFen = this.chess.fen().split(' ')[0];
+    const newFen = `${boardFen} ${nextTurn} ${newCastling} ${newEp} ${newHalfmove} ${newFullmove}`;
+    // King captures leave the board without a king — skip FEN load since game ends immediately
+    if (captured !== 'k') {
+      try { this.chess.load(newFen); } catch { return null; }
+    }
+
+    const pMap = { p: '', n: 'N', b: 'B', r: 'R', q: 'Q', k: 'K' };
+    const notation = `${pMap[piece.type]}${from}${captured ? 'x' : '-'}${to}${promotion ? '='+promotion.toUpperCase() : ''}`;
+    return { piece: piece.type, captured, from, to, promotion: promotion || null, san: notation };
   }
 
-  // Returns true if a piece at this position is protected by SHIELD_WALL
-  _isShielded(pieceColorChar) {
-    const fullColor = pieceColorChar === 'w' ? 'white' : 'black';
-    return this.activeEffects.some(e => e.cardId === 'SHIELD_WALL' && e.color === fullColor);
+  // Returns true if colorChar's king is attacked by any opponent piece
+  _isKingAttacked(colorChar) {
+    const board = this.chess.board();
+    let kingSq = null;
+    for (let r = 0; r < 8 && !kingSq; r++)
+      for (let c = 0; c < 8 && !kingSq; c++)
+        if (board[r][c]?.type === 'k' && board[r][c]?.color === colorChar)
+          kingSq = String.fromCharCode(97 + c) + (8 - r);
+    if (!kingSq) return false;
+    const oppColorChar = colorChar === 'w' ? 'b' : 'w';
+    return this._generateMoves(oppColorChar).some(m => m.to === kingSq);
+  }
+
+  // Returns legal moves for the current position, accounting for active card effects.
+  // No check validation — capture-the-king mode.
+  getLegalMoves() {
+    const color = this.getCurrentTurn();
+    const colorChar = color === 'white' ? 'w' : 'b';
+    let moves = this._generateMoves(colorChar);
+
+    const hobbit = this.activeEffects.some(e => e.cardId === 'HOBBIT_CHARGE');
+    if (hobbit) moves = moves.filter(m => m.piece === 'p');
+
+    const board = this.chess.board();
+    const sq = (row, col) => String.fromCharCode(97 + col) + (8 - row);
+
+    // KNIGHTS_DOMAIN: knights also slide diagonally like bishops
+    if (this.activeEffects.some(e => e.cardId === 'KNIGHTS_DOMAIN') && !hobbit) {
+      for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+          const p = board[row][col];
+          if (!p || p.type !== 'n' || p.color !== colorChar) continue;
+          const from = sq(row, col);
+          for (const [dr, dc] of [[-1,-1],[-1,1],[1,-1],[1,1]]) {
+            let nr = row + dr, nc = col + dc;
+            while (nr >= 0 && nr <= 7 && nc >= 0 && nc <= 7) {
+              const target = board[nr][nc];
+              const to = sq(nr, nc);
+              if (!target) {
+                if (!moves.some(m => m.from === from && m.to === to))
+                  moves.push({ from, to, piece: 'n', captured: null, promotion: null, flags: 'n' });
+              } else {
+                if (target.color !== colorChar && !moves.some(m => m.from === from && m.to === to))
+                  moves.push({ from, to, piece: 'n', captured: target.type, promotion: null, flags: 'c' });
+                break;
+              }
+              nr += dr; nc += dc;
+            }
+          }
+        }
+      }
+    }
+
+    // PAWN_RUSH: non-starting-rank pawns can advance 2 squares
+    if (this.activeEffects.some(e => e.cardId === 'PAWN_RUSH') && !hobbit) {
+      const dir = color === 'white' ? -1 : 1;
+      const startRow = color === 'white' ? 6 : 1;
+      const promoRow = color === 'white' ? 0 : 7;
+      for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+          const p = board[row][col];
+          if (!p || p.type !== 'p' || p.color !== colorChar) continue;
+          if (row === startRow) continue;
+          const midRow = row + dir, targetRow = row + dir * 2;
+          if (targetRow < 0 || targetRow > 7 || targetRow === promoRow) continue;
+          if (board[midRow]?.[col] || board[targetRow]?.[col]) continue;
+          const from = sq(row, col), to = sq(targetRow, col);
+          if (!moves.some(m => m.from === from && m.to === to))
+            moves.push({ from, to, piece: 'p', captured: null, promotion: null, flags: 'b' });
+        }
+      }
+    }
+
+    // PAC_MAN: rooks and queens on edges wrap to opposite edge
+    if (this.activeEffects.some(e => e.cardId === 'PAC_MAN')) {
+      for (let row = 0; row < 8; row++) {
+        for (const col of [0, 7]) {
+          const p = board[row][col];
+          if (!p || !['r','q'].includes(p.type) || p.color !== colorChar) continue;
+          const oppCol = col === 0 ? 7 : 0;
+          const target = board[row][oppCol];
+          if (target?.color === colorChar) continue;
+          if (target?.type === 'k') continue;
+          const from = sq(row, col), to = sq(row, oppCol);
+          if (!moves.some(m => m.from === from && m.to === to))
+            moves.push({ from, to, piece: p.type, captured: target?.type || null, promotion: null, flags: target ? 'c' : 'n' });
+        }
+      }
+    }
+
+    return moves;
   }
 
   resign(socketId) {
@@ -378,6 +638,7 @@ class GameRoom {
     if (this.phase === 'gameover') return { error: 'Game already over' };
     this.isResignation = true;
     this.resignedColor = color;
+    this.winner = color === 'white' ? 'black' : 'white';
     this.phase = 'gameover';
     return { ok: true };
   }
@@ -427,6 +688,8 @@ class GameRoom {
     this.drawOffer = null;
     this.isDraw = false;
     this.lastEvent = null;
+    this.moveHistory = [];
+    this.winner = null;
     if (this.botColor) {
       this.players['__bot__'] = this.botColor;
       this.colors[this.botColor] = '__bot__';
@@ -440,10 +703,9 @@ class GameRoom {
     this.skippedTurns[color]--;
     this.lastMove = null;
     const fen = this.chess.fen();
-    // Guard: if board is corrupted (king missing), end the game gracefully
     if (!fen.includes('K') || !fen.includes('k')) { this.phase = 'gameover'; return { ok: true }; }
     this.chess.load(advanceFenTurn(fen, color));
-    this._afterMove(color, false); // frozen turns don't consume card effect durations
+    this._afterMove(color, false);
     return { ok: true };
   }
 
@@ -454,33 +716,48 @@ class GameRoom {
     if (color !== this.getCurrentTurn()) return { error: 'Not your turn' };
     if (this.skippedTurns[color] > 0) return { error: 'Your turn is frozen — use Pass Turn' };
 
+    const colorChar = color === 'white' ? 'w' : 'b';
+
     const hobbit = this.activeEffects.find(e => e.cardId === 'HOBBIT_CHARGE');
     if (hobbit) {
       const piece = this.chess.get(move.from);
       if (!piece || piece.type !== 'p') return { error: 'Hobbit Charge: only pawns can move' };
     }
 
-    let result = null;
-    try { result = this.chess.move(move); } catch { /* fall through to special moves */ }
+    // Validate against server-generated legal moves
+    const legal = this.getLegalMoves();
+    const isLegal = legal.some(m =>
+      m.from === move.from && m.to === move.to &&
+      (!m.promotion || !move.promotion || m.promotion === move.promotion)
+    );
+    if (!isLegal) return { error: 'Illegal move' };
 
+    // Try chess.js first (handles standard moves with proper state updates)
+    let result = null;
+    try {
+      result = this.chess.move({ from: move.from, to: move.to, promotion: move.promotion || 'q' });
+    } catch { /* fall through */ }
+
+    // If chess.js rejected (move walks into check — allowed in CTK mode), apply manually
     if (!result) {
-      const pawnRush = this.activeEffects.find(e => e.cardId === 'PAWN_RUSH');
-      if (pawnRush && this._isPawnRushMove(move.from, move.to, color))
-        result = this._applySpecialMove(move.from, move.to, color);
+      result = this._applyAnyMove(move.from, move.to, colorChar, move.promotion);
     }
-    if (!result) {
-      const knightsDomain = this.activeEffects.find(e => e.cardId === 'KNIGHTS_DOMAIN');
-      if (knightsDomain && this._isKnightBishopMove(move.from, move.to, color))
-        result = this._applySpecialMove(move.from, move.to, color);
-    }
-    if (!result) {
-      const pacMan = this.activeEffects.find(e => e.cardId === 'PAC_MAN');
-      if (pacMan && this._isPacManWrap(move.from, move.to, color))
-        result = this._applySpecialMove(move.from, move.to, color);
-    }
-    if (!result) return { error: 'Illegal move' };
+
+    if (!result) return { error: 'Move application failed' };
 
     this.lastMove = { from: move.from, to: move.to };
+
+    const pMap = { p: '', n: 'N', b: 'B', r: 'R', q: 'Q', k: 'K' };
+    const cap = result.captured ? 'x' : '-';
+    this.moveHistory.push(result.san || `${pMap[result.piece] ?? ''}${move.from}${cap}${move.to}`);
+
+    // Win condition: king captured
+    if (result.captured === 'k') {
+      this.winner = color;
+      this.phase = 'gameover';
+      this.lastEvent = { type: 'KING_CAPTURED', by: color };
+      return { ok: true };
+    }
 
     if (result.captured) {
       const capturedColor = color === 'white' ? 'black' : 'white';
@@ -491,82 +768,6 @@ class GameRoom {
 
     this._afterMove(color);
     return { ok: true };
-  }
-
-  _applySpecialMove(from, to, color) {
-    const piece = this.chess.get(from);
-    if (!piece) return null;
-    const target = this.chess.get(to);
-    const colorChar = color === 'white' ? 'w' : 'b';
-    if (target?.color === colorChar) return null;
-    if (target?.type === 'k') return null;         // never capture kings via card moves
-    this.chess.remove(from);
-    this.chess.put(piece, to);
-    const newFen = this.chess.fen();
-    // Guard: pawn on promotion rank or missing king would make the FEN invalid
-    if (!newFen.includes('K') || !newFen.includes('k')) {
-      // Undo the move — restore original position
-      this.chess.remove(to);
-      this.chess.put(piece, from);
-      if (target) this.chess.put(target, to);
-      return null;
-    }
-    try {
-      this.chess.load(advanceFenTurn(newFen, color));
-    } catch {
-      // FEN was invalid (e.g., pawn on last rank) — undo
-      this.chess.remove(to);
-      this.chess.put(piece, from);
-      if (target) this.chess.put(target, to);
-      return null;
-    }
-    return { piece: piece.type, captured: target?.type || null, from, to };
-  }
-
-  _isPawnRushMove(from, to, color) {
-    const piece = this.chess.get(from);
-    if (!piece || piece.type !== 'p') return false;
-    if (piece.color !== (color === 'white' ? 'w' : 'b')) return false;
-    if (from[0] !== to[0]) return false;
-    const fromRank = parseInt(from[1]);
-    const toRank = parseInt(to[1]);
-    const rankDiff = color === 'white' ? toRank - fromRank : fromRank - toRank;
-    if (rankDiff !== 2) return false;
-    const midRank = color === 'white' ? fromRank + 1 : fromRank - 1;
-    if (this.chess.get(from[0] + midRank)) return false;
-    if (this.chess.get(to)) return false;
-    const startingRank = color === 'white' ? 2 : 7;
-    if (fromRank === startingRank) return false;
-    return true;
-  }
-
-  _isKnightBishopMove(from, to, color) {
-    const piece = this.chess.get(from);
-    if (!piece || piece.type !== 'n') return false;
-    if (piece.color !== (color === 'white' ? 'w' : 'b')) return false;
-    const fromFile = from.charCodeAt(0) - 97, fromRank = parseInt(from[1]) - 1;
-    const toFile = to.charCodeAt(0) - 97, toRank = parseInt(to[1]) - 1;
-    const df = Math.abs(toFile - fromFile), dr = Math.abs(toRank - fromRank);
-    if (df !== dr || df === 0) return false;
-    const fd = toFile > fromFile ? 1 : -1, rd = toRank > fromRank ? 1 : -1;
-    for (let i = 1; i < df; i++) {
-      const sq = String.fromCharCode(97 + fromFile + i*fd) + (fromRank + i*rd + 1);
-      if (this.chess.get(sq)) return false;
-    }
-    return true;
-  }
-
-  _isPacManWrap(from, to, color) {
-    const piece = this.chess.get(from);
-    if (!piece || !['r','q'].includes(piece.type)) return false;
-    if (piece.color !== (color === 'white' ? 'w' : 'b')) return false;
-    const fromFile = from.charCodeAt(0) - 97, toFile = to.charCodeAt(0) - 97;
-    if (from[1] !== to[1]) return false;
-    if (!((fromFile === 0 && toFile === 7) || (fromFile === 7 && toFile === 0))) return false;
-    const target = this.chess.get(to);
-    if (target?.color === (color === 'white' ? 'w' : 'b')) return false;
-    if (target?.type === 'k') return null;
-    return true;
   }
 
   _afterMove(color, countForEffects = true) {
@@ -581,48 +782,70 @@ class GameRoom {
       for (const e of triggered) if (e.cardId === 'OMEGA_CHAD') this._triggerOmegaChad();
     }
 
+    if (this.phase === 'gameover') return;
+
     if (this.bonusMoves[color] > 0) {
       this.bonusMoves[color]--;
-      const parts = this.chess.fen().split(' ');
+      const fenB = this.chess.fen();
+      if (!fenB.includes('K') || !fenB.includes('k')) { this.phase = 'gameover'; return; }
+      const parts = fenB.split(' ');
       parts[1] = color === 'white' ? 'w' : 'b';
       if (color === 'black') parts[5] = String(Math.max(1, parseInt(parts[5]) - 1));
-      this.chess.load(parts.join(' '));
-      this._scheduleBotTurn(); // ensure bot is triggered for its bonus move
+      try { this.chess.load(parts.join(' ')); } catch { /* ignore */ }
+      this._scheduleBotTurn();
       return;
     }
 
     if (this.chess.turn() === 'w') this.fullMoves++;
-    if (this.chess.isGameOver()) { this.phase = 'gameover'; return; }
+
     if (this.fullMoves > 0 && this.fullMoves % 3 === 0 && this.fullMoves !== this.lastCardDealAt) {
       this.lastCardDealAt = this.fullMoves;
       this._startCardPhase();
       this._scheduleBotTurn();
       return;
     }
+
     this._nextAwaitingOrPlay();
-    // If Hobbit Charge is active and the next player has no legal pawn moves, auto-pass.
-    // If BOTH players are stuck, expire the effect so the game can continue normally.
+
+    // HOBBIT_CHARGE: if next player has no pawn moves, auto-pass their turn
     if (this.phase === 'play' && this.activeEffects.some(e => e.cardId === 'HOBBIT_CHARGE')) {
       const nextColor = this.getCurrentTurn();
-      const pawnMoves = this.chess.moves({ verbose: true }).filter(m => m.piece === 'p');
-      // Validate FEN integrity after chess.moves() — card effects can create positions where
-      // move generation temporarily corrupts _kings state; skip auto-pass if board is inconsistent
-      const fenAfterMoves = this.chess.fen();
-      if (!pawnMoves.length && !this.chess.isGameOver() && fenAfterMoves.includes('K') && fenAfterMoves.includes('k')) {
-        // Check if the other player also has no pawn moves
-        const otherFen = advanceFenTurn(fenAfterMoves, nextColor);
+      const nextColorChar = nextColor === 'white' ? 'w' : 'b';
+      const pawnMoves = this._generateMoves(nextColorChar).filter(m => m.piece === 'p');
+      if (!pawnMoves.length) {
+        // Check if opponent also has no pawn moves
+        const currFen = this.chess.fen();
+        const oppColorChar = nextColorChar === 'w' ? 'b' : 'w';
+        const parts = currFen.split(' ');
+        parts[1] = oppColorChar;
         const tempChess = new Chess();
-        try { tempChess.load(otherFen); } catch { /* ignore */ }
-        const otherPawnMoves = tempChess.moves({ verbose: true }).filter(m => m.piece === 'p');
-        if (!otherPawnMoves.length) {
-          // Both stuck — expire all Hobbit Charge effects immediately
+        let oppHasPawnMoves = false;
+        try {
+          tempChess.load(parts.join(' '));
+          const tempBoard = tempChess.board();
+          const dir = oppColorChar === 'w' ? -1 : 1;
+          outer: for (let r = 0; r < 8; r++) {
+            for (let c = 0; c < 8; c++) {
+              const p = tempBoard[r][c];
+              if (!p || p.color !== oppColorChar || p.type !== 'p') continue;
+              const nr = r + dir;
+              if (nr >= 0 && nr <= 7 && !tempBoard[nr][c]) { oppHasPawnMoves = true; break outer; }
+              for (const dc of [-1, 1]) {
+                const nc = c + dc;
+                if (nr >= 0 && nr <= 7 && nc >= 0 && nc <= 7 && tempBoard[nr][nc]?.color === (oppColorChar === 'w' ? 'b' : 'w'))
+                  { oppHasPawnMoves = true; break outer; }
+              }
+            }
+          }
+        } catch { /* ignore */ }
+
+        if (!oppHasPawnMoves) {
           this.activeEffects = this.activeEffects.filter(e => e.cardId !== 'HOBBIT_CHARGE');
         } else {
-          // Just this player is stuck — auto-pass their turn
-          this.chess.load(otherFen);
+          const newFen = advanceFenTurn(this.chess.fen(), nextColor);
+          try { this.chess.load(newFen); } catch { /* ignore */ }
           if (this.chess.turn() === 'w') this.fullMoves++;
-          if (this.chess.isGameOver()) { this.phase = 'gameover'; }
-          else if (this.fullMoves > 0 && this.fullMoves % 3 === 0 && this.fullMoves !== this.lastCardDealAt) {
+          if (this.fullMoves > 0 && this.fullMoves % 3 === 0 && this.fullMoves !== this.lastCardDealAt) {
             this.lastCardDealAt = this.fullMoves;
             this._startCardPhase();
           } else {
@@ -631,6 +854,7 @@ class GameRoom {
         }
       }
     }
+
     this._scheduleBotTurn();
   }
 
@@ -643,7 +867,6 @@ class GameRoom {
         if (f<0||f>7||r<0||r>7) continue;
         const sq = String.fromCharCode(97+f)+(r+1);
         const p = this.chess.get(sq);
-        // Safety: never remove kings; respect SHIELD_WALL
         if (p && p.type !== 'k' && !this._isShielded(p.color)) this.chess.remove(sq);
       }
   }
@@ -657,18 +880,25 @@ class GameRoom {
         if (p?.type === 'k') kings[p.color] = { r, f };
       }
     if (!kings.w || !kings.b) return;
-    const both = adjacent(kings.w).filter(a => adjacent(kings.b).some(b => b.r===a.r && b.f===a.f));
+    // Destroy pieces adjacent to EITHER king (union)
+    const squaresToCheck = new Set();
+    for (const king of [kings.w, kings.b])
+      for (const { r, f } of adjacent(king))
+        squaresToCheck.add(String.fromCharCode(97+f)+(r+1));
     const destroyed = [];
-    for (const { r, f } of both) {
-      const sq = String.fromCharCode(97+f)+(r+1);
+    for (const sq of squaresToCheck) {
       const p = this.chess.get(sq);
-      // Safety: never remove kings; respect SHIELD_WALL
       if (p && p.type !== 'k' && !this._isShielded(p.color)) {
         this.chess.remove(sq);
         destroyed.push(sq);
       }
     }
     this.lastEvent = { type: 'OMEGA_CHAD', destroyed };
+  }
+
+  _isShielded(pieceColorChar) {
+    const fullColor = pieceColorChar === 'w' ? 'white' : 'black';
+    return this.activeEffects.some(e => e.cardId === 'SHIELD_WALL' && e.color === fullColor);
   }
 
   _startCardPhase() {
@@ -690,11 +920,9 @@ class GameRoom {
   _resolveCards() {
     const selections = { ...this.cardPhase.selections };
     this.cardPhase = null;
-    // Apply non-COPYCAT cards first so COPYCAT can reference them
     for (const color of ['white', 'black']) {
       if (selections[color] !== 'COPYCAT') this._applyCard(selections[color], color);
     }
-    // Now apply COPYCAT — copies opponent's card (not another COPYCAT)
     for (const color of ['white', 'black']) {
       if (selections[color] === 'COPYCAT') {
         const opp = color === 'white' ? 'black' : 'white';
@@ -708,15 +936,14 @@ class GameRoom {
   _applyCard(cardId, color) {
     const opp = color === 'white' ? 'black' : 'white';
     switch (cardId) {
-      case 'DOUBLE_MOVE': this.bonusMoves[color]++; break;
-      case 'TIME_FREEZE': this.skippedTurns.white++; this.skippedTurns.black++; break;
+      case 'DOUBLE_MOVE': this.bonusMoves[color]++; this.bonusMoves[opp]++; break;
+      case 'TIME_FREEZE': this.skippedTurns[opp]++; break;
       case 'RESURRECTION':
         if (this.capturedPieces[color].length > 0) this.actionQueue.push({ type: 'resurrect', color });
         break;
       case 'SWAP_PLACES': this.actionQueue.push({ type: 'swap', color }); break;
       case 'OMEGA_CHAD': this.pendingEffects.push({ cardId, color: 'both', turnsUntil: 6 }); break;
       default: {
-        // Symmetric cards affect all players; personal cards track their owner
         const SYMMETRIC = ['PAC_MAN','HOBBIT_CHARGE','KNIGHTS_DOMAIN','NUCLEAR_PAWN','PAWN_RUSH'];
         const effectColor = SYMMETRIC.includes(cardId) ? 'both' : color;
         this.activeEffects.push({ cardId, color: effectColor, turnsRemaining: CARDS[cardId].turns * 2 });
@@ -724,14 +951,43 @@ class GameRoom {
     }
   }
 
-  _nextAwaitingOrPlay() {
-    if (this.actionQueue.length > 0) {
-      this.awaitingAction = this.actionQueue.shift();
-      this.phase = 'awaiting-action';
-    } else {
-      this.awaitingAction = null;
-      this.phase = 'play';
+  _isActionPossible(action) {
+    const cc = action.color === 'white' ? 'w' : 'b';
+    if (action.type === 'resurrect') {
+      if (!this.capturedPieces[action.color].length) return false;
+      const nextPiece = this.capturedPieces[action.color][this.capturedPieces[action.color].length - 1];
+      const board = this.chess.board();
+      for (let r = 0; r < 8; r++)
+        for (let f = 0; f < 8; f++) {
+          if (board[r][f]) continue;
+          const rank = 8 - r;
+          if (nextPiece === 'p' && (rank === 1 || rank === 8)) continue;
+          return true;
+        }
+      return false;
     }
+    if (action.type === 'swap') {
+      let count = 0;
+      const board = this.chess.board();
+      for (let r = 0; r < 8; r++)
+        for (let f = 0; f < 8; f++)
+          if (board[r][f]?.color === cc && board[r][f]?.type !== 'k') count++;
+      return count >= 2;
+    }
+    return true;
+  }
+
+  _nextAwaitingOrPlay() {
+    while (this.actionQueue.length > 0) {
+      const action = this.actionQueue.shift();
+      if (this._isActionPossible(action)) {
+        this.awaitingAction = action;
+        this.phase = 'awaiting-action';
+        return;
+      }
+    }
+    this.awaitingAction = null;
+    this.phase = 'play';
   }
 
   applySwap(socketId, squares) {
@@ -744,15 +1000,11 @@ class GameRoom {
     const cc = color === 'white' ? 'w' : 'b';
     if (p1.color !== cc || p2.color !== cc) return { error: 'Can only swap your own pieces' };
     if (p1.type === 'k' || p2.type === 'k') return { error: "Can't swap the king" };
-    // Perform swap
+    // Prevent pawns from landing on promotion ranks (would create invalid FEN)
+    if (p1.type === 'p' && (sq2[1] === '1' || sq2[1] === '8')) return { error: 'Pawns cannot be swapped to promotion ranks' };
+    if (p2.type === 'p' && (sq1[1] === '1' || sq1[1] === '8')) return { error: 'Pawns cannot be swapped to promotion ranks' };
     this.chess.remove(sq1); this.chess.remove(sq2);
     this.chess.put(p1, sq2); this.chess.put(p2, sq1);
-    // Safety: reject if swap exposes own king to check
-    if (this._kingInCheck(cc)) {
-      this.chess.remove(sq1); this.chess.remove(sq2);
-      this.chess.put(p1, sq1); this.chess.put(p2, sq2);
-      return { error: 'Swap would leave your king in check' };
-    }
     this._nextAwaitingOrPlay();
     this._scheduleBotTurn();
     return { ok: true };
@@ -766,12 +1018,12 @@ class GameRoom {
     if (this.chess.get(square)) return { error: 'Square is occupied' };
     const cc = color === 'white' ? 'w' : 'b';
     const pieceType = this.capturedPieces[color][this.capturedPieces[color].length - 1];
-    this.chess.put({ type: pieceType, color: cc }, square);
-    // Safety: reject if resurrection exposes own king to check
-    if (this._kingInCheck(cc)) {
-      this.chess.remove(square);
-      return { error: 'Placement would leave your king in check' };
+    // Pawns cannot be placed on promotion ranks (would create invalid FEN)
+    if (pieceType === 'p') {
+      const rank = square[1];
+      if (rank === '1' || rank === '8') return { error: 'Pawns cannot be placed on promotion ranks' };
     }
+    this.chess.put({ type: pieceType, color: cc }, square);
     this.capturedPieces[color].pop();
     this._nextAwaitingOrPlay();
     this._scheduleBotTurn();
@@ -779,9 +1031,11 @@ class GameRoom {
   }
 
   getState() {
+    const turn = this.getCurrentTurn();
+    const turnColorChar = turn === 'white' ? 'w' : 'b';
     return {
       fen: this.chess.fen(),
-      turn: this.getCurrentTurn(),
+      turn,
       phase: this.phase,
       fullMoves: this.fullMoves,
       lastMove: this.lastMove,
@@ -796,15 +1050,15 @@ class GameRoom {
       skippedTurns: this.skippedTurns,
       bonusMoves: this.bonusMoves,
       awaitingAction: this.awaitingAction,
-      gameOver: this.chess.isGameOver() || this.phase === 'gameover',
-      inCheck: this.chess.inCheck(),
-      isCheckmate: this.chess.isCheckmate(),
-      isStalemate: this.chess.isStalemate(),
+      gameOver: this.phase === 'gameover',
+      winner: this.winner,
+      inCheck: this._isKingAttacked(turnColorChar),
       isResignation: this.isResignation,
       resignedColor: this.resignedColor,
       isDraw: this.isDraw,
       drawOffer: this.drawOffer,
-      moveHistory: this.chess.history(),
+      moveHistory: this.moveHistory,
+      legalMoves: this.phase === 'play' ? this.getLegalMoves() : [],
       players: { white: !!this.colors.white, black: !!this.colors.black },
       hasBot: !!this.botColor,
       botDifficulty: this.botDifficulty,

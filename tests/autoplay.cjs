@@ -82,23 +82,30 @@ function playGame(gameNum) {
           const empty = [];
           for (let r2 = 0; r2 < 8; r2++)
             for (let f2 = 0; f2 < 8; f2++)
-              if (!board[r2][f2]) empty.push(String.fromCharCode(97+f2)+(r2+1));
-          if (empty.length) {
-            const sq = empty[Math.floor(Math.random() * empty.length)];
-            const r = room.applyResurrection('p1', sq);
-            if (!r.ok) { flag(gameNum, `Resurrection failed: ${r.error}`); return; }
-          } else return; // no empty squares, can't proceed
+              if (!board[r2][f2]) empty.push(String.fromCharCode(97+f2)+(8-r2));
+          // Shuffle and try until one succeeds (promotion-rank squares are rejected for pawns)
+          empty.sort(() => Math.random() - 0.5);
+          let resurrected = false;
+          for (const sq of empty) {
+            if (room.applyResurrection('p1', sq).ok) { resurrected = true; break; }
+          }
+          if (!resurrected) return; // no valid square, skip action
         } else if (type === 'swap') {
           const board = room.chess.board();
           const pieces = [];
           for (let r2 = 0; r2 < 8; r2++)
             for (let f2 = 0; f2 < 8; f2++) {
               const p = board[r2][f2];
-              if (p?.color === 'w' && p.type !== 'k') pieces.push(String.fromCharCode(97+f2)+(r2+1));
+              if (p?.color === 'w' && p.type !== 'k') pieces.push(String.fromCharCode(97+f2)+(8-r2));
             }
           if (pieces.length >= 2) {
-            const r = room.applySwap('p1', [pieces[0], pieces[1]]);
-            if (!r.ok) { flag(gameNum, `Swap failed: ${r.error}`); return; }
+            // Shuffle and try pairs until one works (some pairs may violate swap rules)
+            pieces.sort(() => Math.random() - 0.5);
+            let swapped = false;
+            for (let i = 0; i < pieces.length - 1 && !swapped; i++) {
+              if (room.applySwap('p1', [pieces[i], pieces[i+1]]).ok) swapped = true;
+            }
+            if (!swapped) { flag(gameNum, 'Swap failed: no valid pair found'); return; }
           } else return;
         }
         continue; // action handled, re-check state
@@ -151,13 +158,15 @@ function playGame(gameNum) {
       const s = room.getState();
       if (s.gameOver || s.phase === 'gameover') {
         stats.games++;
-        if (s.isResignation) {
-          log(gameNum, `Resigned — ${s.resignedColor}`);
-        } else if (s.isCheckmate) {
-          const winner = s.turn === 'white' ? 'black' : 'white';
-          log(gameNum, `Checkmate — ${winner} wins (move ${s.fullMoves})`);
+        if (s.lastEvent?.type === 'KING_CAPTURED' || s.winner) {
+          const winner = s.winner;
+          log(gameNum, `👑 King captured — ${winner} wins (move ${s.fullMoves})`);
           if (winner === 'white') stats.white++; else stats.black++;
-        } else if (s.isStalemate || s.isDraw) {
+        } else if (s.isResignation) {
+          const winner = s.resignedColor === 'white' ? 'black' : 'white';
+          log(gameNum, `Resigned — ${winner} wins`);
+          if (winner === 'white') stats.white++; else stats.black++;
+        } else if (s.isDraw) {
           log(gameNum, `Draw (move ${s.fullMoves})`);
           stats.draw++;
         } else {
