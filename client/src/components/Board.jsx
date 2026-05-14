@@ -36,11 +36,17 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
   }, [fen]);
 
   const board = chess.board();
-  const { awaitingAction, inCheck, lastMove, activeEffects = [] } = gameState;
+  const { awaitingAction, inCheck, lastMove, activeEffects = [], legalMoves = [] } = gameState;
   const myColorChar = color === 'white' ? 'w' : 'b';
   const hobbitActive = activeEffects.some(e => e.cardId === 'HOBBIT_CHARGE');
   const nuclearActive = activeEffects.some(e => e.cardId === 'NUCLEAR_PAWN');
   const knightsDomainActive = activeEffects.some(e => e.cardId === 'KNIGHTS_DOMAIN');
+  // Index server-provided legal moves by from-square for fast lookup
+  const serverMovesByFrom = {};
+  for (const m of legalMoves) {
+    if (!serverMovesByFrom[m.from]) serverMovesByFrom[m.from] = [];
+    serverMovesByFrom[m.from].push(m.to);
+  }
 
   function sendMove(from, to, promotion) {
     socket.emit('move', { from, to, ...(promotion ? { promotion } : {}) }, (r) => {
@@ -79,20 +85,15 @@ export default function Board({ fen, color, gameState, isMyTurn, isAwaitingMe })
       }
       if (piece?.color === myColorChar) {
         setSelected(sq);
-        setLegalTargets(chess.moves({ square: sq, verbose: true }).map(m => m.to));
+        setLegalTargets(serverMovesByFrom[sq] || []);
         return;
       }
       setSelected(null); setLegalTargets([]);
       return;
     }
     if (piece?.color === myColorChar) {
-      // Under Hobbit Charge, only pawns can move — don't show dots for other pieces
-      if (hobbitActive && piece.type !== 'p') {
-        setSelected(null); setLegalTargets([]);
-        return;
-      }
       setSelected(sq);
-      setLegalTargets(chess.moves({ square: sq, verbose: true }).map(m => m.to));
+      setLegalTargets(serverMovesByFrom[sq] || []);
     }
   }
 
